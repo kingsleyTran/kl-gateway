@@ -1,20 +1,15 @@
 version: "3.9"
 
 # ─────────────────────────────────────────────────────────────────
-# OpenClaw Gateway Stack
+# Full stack — tất cả chạy trong Docker.
+# Host filesystem được mount vào /host để gateway đọc project files.
 #
-# Lần đầu chạy: gateway mở Bootstrap UI tại http://localhost:8080
-# Sau bootstrap: .env được generate vào ./config/.env và gateway restart
-#
-# OpenClaw chạy trên HOST, gọi gateway qua http://localhost:8080
-# Projects mount từ host vào /projects/<name> — dynamic, không cần khai báo trước
+# Khởi động: ./start.sh
 # ─────────────────────────────────────────────────────────────────
 
 services:
 
-  # ─────────────────────────────────────────
-  # Vector Store
-  # ─────────────────────────────────────────
+  # ── Vector Store ────────────────────────────────
   chromadb:
     image: chromadb/chroma:latest
     container_name: chromadb
@@ -25,9 +20,7 @@ services:
     networks:
       - openclaw_net
 
-  # ─────────────────────────────────────────
-  # Embedding Model
-  # ─────────────────────────────────────────
+  # ── Embedding Model ─────────────────────────────
   ollama:
     image: ollama/ollama:latest
     container_name: ollama
@@ -46,25 +39,7 @@ services:
     #           count: 1
     #           capabilities: [gpu]
 
-  # ─────────────────────────────────────────
-  # GitHub Copilot sidecar
-  # Expose Copilot như OpenAI-compatible endpoint
-  # ─────────────────────────────────────────
-  copilot-api:
-    image: ghcr.io/ekzhu/copilot-api:latest
-    container_name: copilot-api
-    ports:
-      - "4000:4000"
-    environment:
-      - COPILOT_TOKEN=${COPILOT_TOKEN:-}
-    networks:
-      - openclaw_net
-    profiles:
-      - copilot   # Chỉ start khi: docker compose --profile copilot up
-
-  # ─────────────────────────────────────────
-  # Gateway
-  # ─────────────────────────────────────────
+  # ── Gateway ─────────────────────────────────────
   gateway:
     build:
       context: ./gateway
@@ -73,20 +48,19 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      # Config dir — gateway ghi .env vào đây sau bootstrap
-      - ./config:/config
-      # Projects — thêm project mới: thêm 1 dòng, đặt tên bất kỳ
-      - ${PROJECT_1_PATH:-/tmp}:/projects/project-1:rw
-      - ${PROJECT_2_PATH:-/tmp}:/projects/project-2:rw
-      # - ${PROJECT_3_PATH}:/projects/my-new-project:rw
+      # Toàn bộ home dir → /host trên container
+      # Gateway tự prefix /host khi đọc file
+      - ${HOST_HOME:-~}:/host:ro
+      # Config riêng (rw) — .env + gateway.db
+      - gateway_config:/config
     environment:
       - CHROMA_HOST=chromadb
       - CHROMA_PORT=8000
       - OLLAMA_HOST=ollama
       - OLLAMA_PORT=11434
       - EMBED_MODEL=nomic-embed-text
-      - PROJECTS_ROOT=/projects
-      - COPILOT_API_URL=http://copilot-api:4000
+      # Prefix này được gateway dùng để resolve path thật
+      - HOST_MOUNT_PREFIX=/host
     depends_on:
       - chromadb
       - ollama
@@ -97,6 +71,7 @@ services:
 volumes:
   chroma_data:
   ollama_data:
+  gateway_config:
 
 networks:
   openclaw_net:

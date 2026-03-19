@@ -15,20 +15,7 @@ KL Gateway is an API Gateway project using Python (FastAPI) to manage and route 
 This project acts as a middleware gateway, receiving requests from clients and forwarding them to internal services, while handling authentication, authorization, and related logic.
 
 ## Project Structure
-```
-kl-gateway/
-├── config/                # System configuration
-├── docker-compose.yml     # Docker Compose file
-├── gateway/              # Main source code
-│   ├── Dockerfile        # Gateway Dockerfile
-│   ├── main.py           # FastAPI entry point
-│   ├── requirements.txt  # Python dependencies
-│   ├── bootstrap/        # Static files (frontend)
-│   └── routers/          # FastAPI routers
-├── .gitignore            # Git ignore file
-├── SKILL.md              # Skill documentation
-└── README.md             # (This file)
-```
+![img_1.png](img_1.png)
 
 ## Installation
 Requirements:
