@@ -1,0 +1,816 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OpenClaw Gateway — Setup</title>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Syne:wght@400;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg:       #0a0a0f;
+      --surface:  #111118;
+      --border:   #1e1e2e;
+      --accent:   #00ff9d;
+      --accent2:  #ff6b35;
+      --muted:    #3a3a5c;
+      --text:     #c8c8e8;
+      --dim:      #5a5a8a;
+      --success:  #00ff9d;
+      --error:    #ff4566;
+      --warn:     #ffaa00;
+      --font-mono: 'JetBrains Mono', monospace;
+      --font-sans: 'Syne', sans-serif;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font-mono);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 40px 20px 80px;
+      position: relative;
+      overflow-x: hidden;
+    }
+
+    /* Grid background */
+    body::before {
+      content: '';
+      position: fixed; inset: 0;
+      background-image:
+              linear-gradient(rgba(0,255,157,0.03) 1px, transparent 1px),
+              linear-gradient(90deg, rgba(0,255,157,0.03) 1px, transparent 1px);
+      background-size: 40px 40px;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 680px;
+      position: relative;
+      z-index: 1;
+    }
+
+    /* Header */
+    .header {
+      margin-bottom: 48px;
+      animation: fadeDown 0.6s ease both;
+    }
+
+    .logo {
+      font-family: var(--font-sans);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.3em;
+      color: var(--accent);
+      text-transform: uppercase;
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .logo::before {
+      content: '◈';
+      font-size: 14px;
+      animation: spin 4s linear infinite;
+    }
+
+    h1 {
+      font-family: var(--font-sans);
+      font-size: 32px;
+      font-weight: 800;
+      color: #fff;
+      line-height: 1.1;
+      margin-bottom: 8px;
+    }
+
+    .subtitle {
+      font-size: 12px;
+      color: var(--dim);
+      letter-spacing: 0.05em;
+    }
+
+    /* Step indicator */
+    .steps {
+      display: flex;
+      gap: 0;
+      margin-bottom: 40px;
+      animation: fadeDown 0.6s 0.1s ease both;
+    }
+
+    .step {
+      flex: 1;
+      padding: 10px 0;
+      text-align: center;
+      font-size: 10px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--muted);
+      border-bottom: 2px solid var(--border);
+      cursor: pointer;
+      transition: all 0.2s;
+      position: relative;
+    }
+
+    .step.active {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+    }
+
+    .step.done {
+      color: var(--dim);
+      border-bottom-color: var(--muted);
+    }
+
+    .step.done::after {
+      content: ' ✓';
+      color: var(--success);
+    }
+
+    /* Cards */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 2px;
+      padding: 28px 32px;
+      margin-bottom: 16px;
+      animation: fadeUp 0.4s ease both;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, var(--accent), transparent);
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+
+    .card:hover::before { opacity: 1; }
+
+    .card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 20px;
+    }
+
+    .card-title {
+      font-family: var(--font-sans);
+      font-size: 14px;
+      font-weight: 700;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .provider-icon {
+      width: 28px; height: 28px;
+      border-radius: 2px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 14px;
+      background: var(--border);
+    }
+
+    .badge {
+      font-size: 9px;
+      letter-spacing: 0.15em;
+      padding: 3px 8px;
+      border-radius: 2px;
+      text-transform: uppercase;
+    }
+
+    .badge-optional { background: rgba(90,90,138,0.3); color: var(--dim); }
+    .badge-oauth    { background: rgba(255,107,53,0.15); color: var(--accent2); border: 1px solid rgba(255,107,53,0.3); }
+    .badge-verified { background: rgba(0,255,157,0.1); color: var(--accent); border: 1px solid rgba(0,255,157,0.3); }
+    .badge-error    { background: rgba(255,69,102,0.1); color: var(--error); border: 1px solid rgba(255,69,102,0.3); }
+
+    /* Inputs */
+    .input-group { margin-bottom: 16px; }
+
+    label {
+      display: block;
+      font-size: 10px;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      color: var(--dim);
+      margin-bottom: 6px;
+    }
+
+    input[type="text"], input[type="password"], select {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 2px;
+      padding: 10px 14px;
+      font-family: var(--font-mono);
+      font-size: 13px;
+      color: var(--text);
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    input:focus, select:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 1px rgba(0,255,157,0.1);
+    }
+
+    input.error { border-color: var(--error); }
+    input.success { border-color: var(--success); }
+
+    select option { background: var(--surface); }
+
+    /* Buttons */
+    .btn {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      padding: 10px 20px;
+      border-radius: 2px;
+      border: none;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: var(--bg);
+      font-weight: 700;
+    }
+
+    .btn-primary:hover { background: #00e88a; transform: translateY(-1px); }
+    .btn-primary:active { transform: translateY(0); }
+    .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+
+    .btn-ghost {
+      background: transparent;
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+
+    .btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
+
+    .btn-danger {
+      background: transparent;
+      color: var(--error);
+      border: 1px solid rgba(255,69,102,0.3);
+    }
+
+    /* Device flow box */
+    .device-box {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 2px;
+      padding: 20px;
+      text-align: center;
+      display: none;
+    }
+
+    .device-box.active { display: block; }
+
+    .device-code {
+      font-size: 28px;
+      font-weight: 700;
+      letter-spacing: 0.3em;
+      color: var(--accent);
+      margin: 16px 0;
+      padding: 16px;
+      background: rgba(0,255,157,0.05);
+      border: 1px dashed rgba(0,255,157,0.3);
+      border-radius: 2px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    .device-code:hover { background: rgba(0,255,157,0.1); }
+
+    .device-instruction {
+      font-size: 11px;
+      color: var(--dim);
+      line-height: 1.8;
+    }
+
+    .device-instruction a {
+      color: var(--accent2);
+      text-decoration: none;
+    }
+
+    .device-instruction a:hover { text-decoration: underline; }
+
+    .poll-status {
+      font-size: 11px;
+      color: var(--dim);
+      margin-top: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+
+    .spinner {
+      width: 10px; height: 10px;
+      border: 1px solid var(--muted);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: rotate 0.8s linear infinite;
+      display: none;
+    }
+
+    .spinner.active { display: inline-block; }
+
+    /* Status message */
+    .msg {
+      font-size: 11px;
+      padding: 8px 12px;
+      border-radius: 2px;
+      margin-top: 12px;
+      display: none;
+    }
+
+    .msg.success { background: rgba(0,255,157,0.08); color: var(--success); border: 1px solid rgba(0,255,157,0.2); display: block; }
+    .msg.error   { background: rgba(255,69,102,0.08); color: var(--error);  border: 1px solid rgba(255,69,102,0.2); display: block; }
+    .msg.info    { background: rgba(0,150,255,0.08);  color: #60b8ff;       border: 1px solid rgba(0,150,255,0.2); display: block; }
+
+    /* Model selector */
+    .model-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    .model-option {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 2px;
+      padding: 10px 14px;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-size: 12px;
+    }
+
+    .model-option:hover { border-color: var(--muted); }
+    .model-option.selected { border-color: var(--accent); background: rgba(0,255,157,0.05); color: var(--accent); }
+
+    .model-name { font-weight: 500; }
+    .model-provider { font-size: 9px; color: var(--dim); margin-top: 2px; letter-spacing: 0.1em; text-transform: uppercase; }
+
+    /* Nav */
+    .nav {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: 32px;
+    }
+
+    /* Complete screen */
+    .complete {
+      text-align: center;
+      padding: 60px 0;
+      display: none;
+    }
+
+    .complete.active { display: block; }
+
+    .complete-icon {
+      font-size: 48px;
+      margin-bottom: 24px;
+      animation: pulse 2s ease infinite;
+    }
+
+    .complete h2 {
+      font-family: var(--font-sans);
+      font-size: 24px;
+      font-weight: 800;
+      color: #fff;
+      margin-bottom: 12px;
+    }
+
+    .complete p {
+      font-size: 12px;
+      color: var(--dim);
+      line-height: 1.8;
+    }
+
+    .log-line {
+      font-size: 11px;
+      color: var(--dim);
+      margin-top: 24px;
+      text-align: left;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      padding: 16px;
+      border-radius: 2px;
+      line-height: 2;
+    }
+
+    .log-line .ok { color: var(--success); }
+    .log-line .skip { color: var(--muted); }
+
+    /* Animations */
+    @keyframes fadeDown { from { opacity: 0; transform: translateY(-16px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes fadeUp   { from { opacity: 0; transform: translateY(16px);  } to { opacity: 1; transform: translateY(0); } }
+    @keyframes rotate   { to { transform: rotate(360deg); } }
+    @keyframes spin     { to { transform: rotate(360deg); } }
+    @keyframes pulse    { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+  </style>
+</head>
+<body>
+<div class="container">
+
+  <div class="header">
+    <div class="logo">OpenClaw Gateway</div>
+    <h1>Initial Setup</h1>
+    <p class="subtitle">Configure AI providers to start using the gateway</p>
+  </div>
+
+  <div class="steps">
+    <div class="step active" id="step-tab-1" onclick="goStep(1)">01 · Providers</div>
+    <div class="step" id="step-tab-2" onclick="goStep(2)">02 · Default Model</div>
+    <div class="step" id="step-tab-3">03 · Confirm</div>
+  </div>
+
+  <!-- ── STEP 1: Providers ── -->
+  <div id="step-1">
+
+    <!-- OpenAI -->
+    <div class="card" style="animation-delay:0.05s">
+      <div class="card-header">
+        <div class="card-title">
+          <div class="provider-icon">⬡</div>
+          OpenAI
+        </div>
+        <span class="badge badge-optional" id="badge-openai">Optional</span>
+      </div>
+      <div class="input-group">
+        <label>API Key</label>
+        <input type="password" id="openai-key" placeholder="sk-..." autocomplete="off">
+      </div>
+      <button class="btn btn-ghost" onclick="verifyOpenAI()">Verify key</button>
+      <div class="msg" id="msg-openai"></div>
+    </div>
+
+    <!-- Gemini -->
+    <div class="card" style="animation-delay:0.1s">
+      <div class="card-header">
+        <div class="card-title">
+          <div class="provider-icon">◇</div>
+          Google Gemini
+        </div>
+        <span class="badge badge-optional" id="badge-gemini">Optional</span>
+      </div>
+      <div class="input-group">
+        <label>API Key</label>
+        <input type="password" id="gemini-key" placeholder="AIza..." autocomplete="off">
+      </div>
+      <button class="btn btn-ghost" onclick="verifyGemini()">Verify key</button>
+      <div class="msg" id="msg-gemini"></div>
+    </div>
+
+    <!-- GitHub Copilot -->
+    <div class="card" style="animation-delay:0.15s">
+      <div class="card-header">
+        <div class="card-title">
+          <div class="provider-icon">⌘</div>
+          GitHub Copilot
+        </div>
+        <span class="badge badge-oauth" id="badge-copilot">OAuth Device Flow</span>
+      </div>
+
+      <button class="btn btn-ghost" onclick="startCopilotFlow()" id="btn-copilot-start">
+        Connect GitHub account
+      </button>
+
+      <div class="device-box" id="device-box">
+        <p class="device-instruction">
+          Go to <a href="https://github.com/login/device" target="_blank">github.com/login/device</a><br>
+          and enter this code:
+        </p>
+        <div class="device-code" id="device-code" onclick="copyCode()" title="Click to copy">——————</div>
+        <p class="device-instruction">Click the code to copy it to clipboard</p>
+        <div class="poll-status">
+          <div class="spinner active" id="poll-spinner"></div>
+          <span id="poll-text">Waiting for authorization...</span>
+        </div>
+      </div>
+
+      <div class="msg" id="msg-copilot"></div>
+    </div>
+
+    <div class="nav">
+      <span class="subtitle" id="provider-hint">At least one provider required</span>
+      <button class="btn btn-primary" onclick="goStep(2)" id="btn-next-1" disabled>
+        Next → Model
+      </button>
+    </div>
+  </div>
+
+  <!-- ── STEP 2: Default Model ── -->
+  <div id="step-2" style="display:none">
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">Default Model</div>
+      </div>
+      <p style="font-size:12px;color:var(--dim);margin-bottom:20px;">
+        OpenClaw uses this model when no model is specified in a task request.
+      </p>
+      <div class="model-grid" id="model-grid">
+        <!-- populated by JS based on verified providers -->
+      </div>
+    </div>
+
+    <div class="nav">
+      <button class="btn btn-ghost" onclick="goStep(1)">← Back</button>
+      <button class="btn btn-primary" onclick="goStep(3)">Next → Confirm</button>
+    </div>
+  </div>
+
+  <!-- ── STEP 3: Confirm & Save ── -->
+  <div id="step-3" style="display:none">
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">Review Configuration</div>
+      </div>
+      <div id="summary" style="font-size:12px;line-height:2.2;color:var(--dim);">
+      </div>
+    </div>
+
+    <div class="nav">
+      <button class="btn btn-ghost" onclick="goStep(2)">← Back</button>
+      <button class="btn btn-primary" onclick="saveConfig()" id="btn-save">
+        Save & Start Gateway
+      </button>
+    </div>
+
+    <div class="msg" id="msg-save"></div>
+  </div>
+
+  <!-- ── COMPLETE ── -->
+  <div class="complete" id="complete">
+    <div class="complete-icon">◈</div>
+    <h2>Gateway is ready</h2>
+    <p>Configuration saved.<br>The gateway will restart and be available at<br><strong style="color:var(--accent)">http://localhost:8080</strong></p>
+    <div class="log-line" id="complete-log"></div>
+  </div>
+
+</div>
+
+<script>
+  const state = {
+    openai:  { key: null, verified: false },
+    gemini:  { key: null, verified: false },
+    copilot: { token: null, verified: false },
+    defaultModel: null,
+    deviceCode: null,
+    pollInterval: null,
+  };
+
+  // ── API calls ──────────────────────────────────
+  async function api(method, path, body) {
+    const res = await fetch('/api/bootstrap' + path, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Request failed');
+    return data;
+  }
+
+  // ── Step navigation ────────────────────────────
+  function goStep(n) {
+    [1,2,3].forEach(i => {
+      document.getElementById('step-' + i).style.display = i === n ? 'block' : 'none';
+      const tab = document.getElementById('step-tab-' + i);
+      if (tab) {
+        tab.className = 'step' + (i === n ? ' active' : (i < n ? ' done' : ''));
+      }
+    });
+    if (n === 2) buildModelGrid();
+    if (n === 3) buildSummary();
+  }
+
+  // ── OpenAI ────────────────────────────────────
+  async function verifyOpenAI() {
+    const key = document.getElementById('openai-key').value.trim();
+    const msg = document.getElementById('msg-openai');
+    const badge = document.getElementById('badge-openai');
+    if (!key) { showMsg(msg, 'error', 'Enter an API key first'); return; }
+    showMsg(msg, 'info', 'Verifying...');
+    try {
+      await api('POST', '/openai/verify', { api_key: key });
+      state.openai = { key, verified: true };
+      document.getElementById('openai-key').classList.add('success');
+      badge.textContent = 'Verified ✓';
+      badge.className = 'badge badge-verified';
+      showMsg(msg, 'success', 'OpenAI key verified');
+      checkProviders();
+    } catch(e) {
+      document.getElementById('openai-key').classList.add('error');
+      showMsg(msg, 'error', e.message);
+    }
+  }
+
+  // ── Gemini ────────────────────────────────────
+  async function verifyGemini() {
+    const key = document.getElementById('gemini-key').value.trim();
+    const msg = document.getElementById('msg-gemini');
+    const badge = document.getElementById('badge-gemini');
+    if (!key) { showMsg(msg, 'error', 'Enter an API key first'); return; }
+    showMsg(msg, 'info', 'Verifying...');
+    try {
+      await api('POST', '/gemini/verify', { api_key: key });
+      state.gemini = { key, verified: true };
+      document.getElementById('gemini-key').classList.add('success');
+      badge.textContent = 'Verified ✓';
+      badge.className = 'badge badge-verified';
+      showMsg(msg, 'success', 'Gemini key verified');
+      checkProviders();
+    } catch(e) {
+      document.getElementById('gemini-key').classList.add('error');
+      showMsg(msg, 'error', e.message);
+    }
+  }
+
+  // ── Copilot Device Flow ───────────────────────
+  async function startCopilotFlow() {
+    const btn = document.getElementById('btn-copilot-start');
+    const box = document.getElementById('device-box');
+    btn.disabled = true;
+    btn.textContent = 'Starting...';
+    try {
+      const data = await api('POST', '/copilot/start');
+      state.deviceCode = data.device_code;
+      document.getElementById('device-code').textContent = data.user_code;
+      box.classList.add('active');
+      btn.style.display = 'none';
+      // Open GitHub device page
+      window.open(data.verification_uri, '_blank');
+      // Start polling
+      const interval = (data.interval || 5) * 1000;
+      state.pollInterval = setInterval(() => pollCopilot(data.device_code), interval);
+    } catch(e) {
+      btn.disabled = false;
+      btn.textContent = 'Connect GitHub account';
+      showMsg(document.getElementById('msg-copilot'), 'error', e.message);
+    }
+  }
+
+  async function pollCopilot(deviceCode) {
+    try {
+      const data = await api('POST', '/copilot/poll', { device_code: deviceCode });
+      if (data.status === 'success') {
+        clearInterval(state.pollInterval);
+        state.copilot = { token: data.token, verified: true };
+        document.getElementById('poll-spinner').classList.remove('active');
+        document.getElementById('poll-text').textContent = 'Authorized ✓';
+        document.getElementById('poll-text').style.color = 'var(--accent)';
+        document.getElementById('badge-copilot').textContent = 'Connected ✓';
+        document.getElementById('badge-copilot').className = 'badge badge-verified';
+        showMsg(document.getElementById('msg-copilot'), 'success', 'GitHub Copilot connected');
+        checkProviders();
+      } else if (data.status === 'slow_down') {
+        clearInterval(state.pollInterval);
+        state.pollInterval = setInterval(() => pollCopilot(deviceCode), 10000);
+      }
+    } catch(e) {
+      clearInterval(state.pollInterval);
+      showMsg(document.getElementById('msg-copilot'), 'error', e.message);
+    }
+  }
+
+  function copyCode() {
+    const code = document.getElementById('device-code').textContent;
+    navigator.clipboard.writeText(code);
+    document.getElementById('device-code').textContent = 'Copied!';
+    setTimeout(() => {
+      document.getElementById('device-code').textContent = code;
+    }, 1500);
+  }
+
+  // ── Provider check ────────────────────────────
+  function checkProviders() {
+    const any = state.openai.verified || state.gemini.verified || state.copilot.verified;
+    document.getElementById('btn-next-1').disabled = !any;
+    if (any) document.getElementById('provider-hint').textContent = 'Ready to continue';
+  }
+
+  // ── Model grid ────────────────────────────────
+  const MODEL_OPTIONS = [
+    { id: 'gpt-4.1',           name: 'GPT-4.1',         provider: 'openai'  },
+    { id: 'gpt-4.1-mini',      name: 'GPT-4.1 Mini',    provider: 'openai'  },
+    { id: 'gemini-2.5-pro',    name: 'Gemini 2.5 Pro',  provider: 'gemini'  },
+    { id: 'gemini-2.5-flash',  name: 'Gemini 2.5 Flash',provider: 'gemini'  },
+    { id: 'copilot-gpt-4.1',  name: 'Copilot GPT-4.1', provider: 'copilot' },
+    { id: 'copilot-claude',   name: 'Copilot Claude',   provider: 'copilot' },
+  ];
+
+  function buildModelGrid() {
+    const grid = document.getElementById('model-grid');
+    const available = MODEL_OPTIONS.filter(m => state[m.provider]?.verified);
+    if (!state.defaultModel && available.length > 0) state.defaultModel = available[0].id;
+
+    grid.innerHTML = available.map(m => `
+    <div class="model-option ${state.defaultModel === m.id ? 'selected' : ''}"
+         onclick="selectModel('${m.id}')">
+      <div class="model-name">${m.name}</div>
+      <div class="model-provider">${m.provider}</div>
+    </div>
+  `).join('');
+  }
+
+  function selectModel(id) {
+    state.defaultModel = id;
+    buildModelGrid();
+  }
+
+  // ── Summary ───────────────────────────────────
+  function buildSummary() {
+    const lines = [];
+    if (state.openai.verified)  lines.push(`<span class="ok">✓</span> OpenAI — API key configured`);
+    if (state.gemini.verified)  lines.push(`<span class="ok">✓</span> Google Gemini — API key configured`);
+    if (state.copilot.verified) lines.push(`<span class="ok">✓</span> GitHub Copilot — OAuth token acquired`);
+    if (!state.openai.verified)  lines.push(`<span class="skip">–</span> OpenAI — skipped`);
+    if (!state.gemini.verified)  lines.push(`<span class="skip">–</span> Google Gemini — skipped`);
+    if (!state.copilot.verified) lines.push(`<span class="skip">–</span> GitHub Copilot — skipped`);
+    lines.push(`<br><span class="ok">◈</span> Default model: <strong style="color:var(--text)">${state.defaultModel}</strong>`);
+    document.getElementById('summary').innerHTML = lines.join('<br>');
+  }
+
+  // ── Save ──────────────────────────────────────
+  async function saveConfig() {
+    const btn = document.getElementById('btn-save');
+    const msg = document.getElementById('msg-save');
+    btn.disabled = true;
+    btn.textContent = 'Saving...';
+
+    const providers = {};
+    if (state.openai.verified)  providers.openai  = { api_key: state.openai.key };
+    if (state.gemini.verified)  providers.gemini  = { api_key: state.gemini.key };
+    if (state.copilot.verified) providers.copilot = { token: state.copilot.token };
+
+    try {
+      await api('POST', '/save', { providers, default_model: state.defaultModel });
+      // Show complete
+      document.getElementById('step-3').style.display = 'none';
+      const complete = document.getElementById('complete');
+      complete.classList.add('active');
+
+      const logLines = [];
+      if (state.openai.verified)  logLines.push(`<span class="ok">✓</span> OPENAI_API_KEY written`);
+      if (state.gemini.verified)  logLines.push(`<span class="ok">✓</span> GEMINI_API_KEY written`);
+      if (state.copilot.verified) logLines.push(`<span class="ok">✓</span> COPILOT_TOKEN written`);
+      logLines.push(`<span class="ok">✓</span> DEFAULT_MODEL=${state.defaultModel}`);
+      logLines.push(`<span class="ok">✓</span> .env written to /config/.env`);
+      logLines.push(`<span class="ok">✓</span> Gateway restarting...`);
+      document.getElementById('complete-log').innerHTML = logLines.join('<br>');
+
+      // Poll until gateway is ready
+      setTimeout(checkGatewayReady, 3000);
+    } catch(e) {
+      btn.disabled = false;
+      btn.textContent = 'Save & Start Gateway';
+      showMsg(msg, 'error', e.message);
+    }
+  }
+
+  async function checkGatewayReady() {
+    try {
+      const res = await fetch('/health');
+      const data = await res.json();
+      if (data.bootstrapped) {
+        document.getElementById('complete-log').innerHTML +=
+                '<br><span class="ok">✓</span> Gateway ready — <a href="/" style="color:var(--accent2)">reload page</a>';
+      } else {
+        setTimeout(checkGatewayReady, 2000);
+      }
+    } catch {
+      setTimeout(checkGatewayReady, 2000);
+    }
+  }
+
+  // ── Helpers ───────────────────────────────────
+  function showMsg(el, type, text) {
+    el.className = 'msg ' + type;
+    el.textContent = text;
+  }
+
+  // Init
+  checkProviders();
+</script>
+</body>
+</html>
