@@ -1,0 +1,12 @@
+# Ignore JetBrains IDE settings
+.idea/
+*.iml
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+# Virtual environments
+env/
+venv/
+ENV/
+# macOS system files
+.DS_Store
