@@ -4,6 +4,7 @@ Bootstrap state đọc từ SQLite mỗi request — không cache, không .env.
 Dùng lifespan để init DB đúng cách với uvloop.
 """
 
+import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -16,6 +17,11 @@ from db import init_db, is_bootstrapped
 
 CONFIG_DIR = Path(os.getenv("CONFIG_DIR", "/config"))
 STATIC_DIR = Path(__file__).parent / "bootstrap" / "static"
+
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+)
 
 
 @asynccontextmanager

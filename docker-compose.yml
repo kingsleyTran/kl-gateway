@@ -55,6 +55,8 @@ services:
     volumes:
       # App source bind mount để uvicorn --reload hot-reload khi sửa file local
       - ./gateway:/app
+      # Reuse local Codex login from host for web-first import flow
+      - ${HOME}/.codex:/root/.codex:ro
       # Projects — mỗi folder 1 volume, tên tùy ý
       # Thêm project mới: thêm 1 dòng, đổi tên sau dấu :
       # Format: /path/on/host:/projects/<tên>:ro

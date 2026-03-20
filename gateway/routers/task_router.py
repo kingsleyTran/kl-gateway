@@ -13,13 +13,11 @@ import chromadb
 import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from openai import APIError, AuthenticationError, NotFoundError, OpenAI, PermissionDeniedError, RateLimitError
 
 from db import (
-    get_config, get_project, set_config, update_project_indexed,
+    get_config, get_project, update_project_indexed,
     list_projects as db_list_projects
 )
-from oauth import OPENAI_CODEX_API_BASE, refresh_openai_codex_token
 
 router = APIRouter()
 
@@ -38,25 +36,24 @@ chroma_client = chromadb.HttpClient(host=CHROMA_HOST, port=CHROMA_PORT)
 
 # ── Model Registry ────────────────────────────────
 class ModelProvider(str, Enum):
-    OPENAI = "openai"
-    OPENAI_CODEX = "openai-codex"
+    OPENAI    = "openai"
     ANTHROPIC = "anthropic"
-    GEMINI = "gemini"
-    COPILOT = "copilot"
+    GEMINI    = "gemini"
+    CODEX     = "codex"   # ChatGPT OAuth
 
 # Static registry — fallback và well-known models
 MODEL_REGISTRY: dict[str, ModelProvider] = {
-    # OpenAI API key
-    "openai/gpt-4.1": ModelProvider.OPENAI,
-    "openai/gpt-4.1-mini": ModelProvider.OPENAI,
-    "openai/gpt-4o": ModelProvider.OPENAI,
-    "openai/gpt-4o-mini": ModelProvider.OPENAI,
-    "openai/gpt-5.4": ModelProvider.OPENAI,
-    "openai/codex-mini-latest": ModelProvider.OPENAI,
-    # OpenAI Codex OAuth
-    "openai-codex/gpt-5.4": ModelProvider.OPENAI_CODEX,
-    "openai-codex/gpt-5.3-codex": ModelProvider.OPENAI_CODEX,
-    "openai-codex/gpt-5.3-codex-spark": ModelProvider.OPENAI_CODEX,
+    # OpenAI Codex (ChatGPT OAuth)
+    "openai-codex/gpt-5.4":         ModelProvider.CODEX,
+    "openai-codex/gpt-5.3-codex":   ModelProvider.CODEX,
+    "openai-codex/gpt-5.1-codex-mini": ModelProvider.CODEX,
+    # OpenAI
+    "gpt-4.1":              ModelProvider.OPENAI,
+    "gpt-4.1-mini":         ModelProvider.OPENAI,
+    "gpt-4o":               ModelProvider.OPENAI,
+    "gpt-4o-mini":          ModelProvider.OPENAI,
+    "gpt-5.4":              ModelProvider.OPENAI,
+    "codex-mini-latest":    ModelProvider.OPENAI,
     # Anthropic
     "claude-sonnet-4-6":    ModelProvider.ANTHROPIC,
     "claude-haiku-4-5":     ModelProvider.ANTHROPIC,
@@ -70,46 +67,26 @@ MODEL_REGISTRY: dict[str, ModelProvider] = {
     "gemini-1.5-pro":       ModelProvider.GEMINI,
     "gemini-1.5-flash":     ModelProvider.GEMINI,
     "gemini-3.1-pro":       ModelProvider.GEMINI,
-    # Copilot
-    "copilot-gpt-4.1":      ModelProvider.COPILOT,
-    "copilot-claude":        ModelProvider.COPILOT,
 }
 
 
-def normalize_model_name(model: str) -> tuple[ModelProvider, str]:
-    raw = (model or "").strip()
-    if not raw:
-        raise HTTPException(400, detail="Model is required.")
-    if raw in MODEL_REGISTRY:
-        provider = MODEL_REGISTRY[raw]
-        return provider, raw.split("/", 1)[1] if "/" in raw else raw
-
-    lower = raw.lower()
-    if lower.startswith("openai-codex/"):
-        return ModelProvider.OPENAI_CODEX, raw.split("/", 1)[1]
-    if lower.startswith("openai/"):
-        return ModelProvider.OPENAI, raw.split("/", 1)[1]
-    if lower.startswith("anthropic/"):
-        return ModelProvider.ANTHROPIC, raw.split("/", 1)[1]
-    if lower.startswith("gemini/"):
-        return ModelProvider.GEMINI, raw.split("/", 1)[1]
-    if lower.startswith("copilot/"):
-        return ModelProvider.COPILOT, raw.split("/", 1)[1]
-
-    if lower.startswith("gpt-") or lower.startswith(("o1", "o3", "o4")):
-        return ModelProvider.OPENAI, raw
-    if lower.startswith("claude-"):
-        return ModelProvider.ANTHROPIC, raw
-    if lower.startswith("gemini-"):
-        return ModelProvider.GEMINI, raw
-    if lower.startswith("copilot-"):
-        return ModelProvider.COPILOT, raw.replace("copilot-", "", 1)
-
-    raise HTTPException(400, detail=f"Unknown model '{model}'. Use provider/model, for example openai/gpt-4.1 or openai-codex/gpt-5.4.")
-
-
 def resolve_provider(model: str) -> ModelProvider:
-    return normalize_model_name(model)[0]
+    """
+    Resolve provider từ model name.
+    Static registry trước, sau đó prefix matching cho dynamic models.
+    """
+    if model in MODEL_REGISTRY:
+        return MODEL_REGISTRY[model]
+
+    # Prefix matching cho models không có trong registry
+    m = model.lower()
+    if m.startswith("gpt-") or m.startswith("o1") or m.startswith("o3") or m.startswith("o4"):
+        return ModelProvider.OPENAI
+    if m.startswith("claude-"):
+        return ModelProvider.ANTHROPIC
+    if m.startswith("gemini-"):
+        return ModelProvider.GEMINI
+    raise HTTPException(400, detail=f"Unknown model '{model}'. Cannot determine provider.")
 
 
 # ── Schemas ───────────────────────────────────────
@@ -324,41 +301,9 @@ def parse_json(raw: str, model: str) -> dict:
         raise HTTPException(500, detail=f"[{model}] invalid JSON: {e}\nRaw: {raw}")
 
 
-async def get_openai_codex_access_token() -> str:
-    refresh_token = await get_config("openai_codex_refresh_token")
-    if not refresh_token:
-        raise HTTPException(500, detail="OpenAI Codex OAuth is not configured. Connect it in bootstrap first.")
-
-    expires_at_raw = await get_config("openai_codex_expires_at", "0")
-    access_token = await get_config("openai_codex_access_token")
-    try:
-        expires_at = int(expires_at_raw or "0")
-    except ValueError:
-        expires_at = 0
-
-    if access_token and expires_at > int(time.time()) + 15:
-        return access_token
-
-    try:
-        token_data = await refresh_openai_codex_token(refresh_token=refresh_token)
-    except httpx.HTTPStatusError as exc:
-        detail = exc.response.text[:500] if exc.response is not None else str(exc)
-        raise HTTPException(401, detail=f"OpenAI Codex session expired or was revoked. Reconnect OAuth in bootstrap. {detail}")
-    except httpx.HTTPError as exc:
-        raise HTTPException(502, detail=f"Failed to refresh OpenAI Codex token: {exc}")
-
-    await set_config("openai_codex_access_token", token_data["access_token"])
-    await set_config("openai_codex_refresh_token", token_data.get("refresh_token") or refresh_token)
-    await set_config("openai_codex_expires_at", str(token_data["expires_at"]))
-    await set_config("openai_codex_account_id", token_data.get("account_id", ""))
-    await set_config("openai_codex_token_type", token_data.get("token_type", "Bearer"))
-    await set_config("openai_codex_scope", token_data.get("scope", ""))
-    return token_data["access_token"]
-
-
 async def call_model(task: str, chunks: list[dict], model: str, analysis: dict = None) -> tuple[dict, dict]:
-    """Credentials đọc từ SQLite mỗi call. Analysis context từ RAG pre-flight."""
-    provider, provider_model = normalize_model_name(model)
+    """API key đọc từ SQLite mỗi call. Analysis context từ RAG pre-flight."""
+    provider = resolve_provider(model)
     # Dùng analysis-aware prompt nếu có
     if analysis:
         prompt = build_prompt_with_analysis(task, chunks, analysis)
@@ -368,73 +313,54 @@ async def call_model(task: str, chunks: list[dict], model: str, analysis: dict =
 
     # ── OpenAI ──────────────────────────────────
     if provider == ModelProvider.OPENAI:
-        api_key = await get_config("openai_key")
+        # Prefer Codex OAuth token if available and valid
+        import time as _t
+        codex_access  = await get_config("openai_codex_access", "")
+        codex_expires = int(await get_config("openai_codex_expires", "0"))
+        codex_valid   = bool(codex_access) and codex_expires > int(_t.time())
+
+        if codex_valid:
+            api_key = codex_access
+            base_url = "https://chatgpt.com/backend-api"
+        else:
+            api_key = await get_config("openai_key")
+            base_url = None
+
         if not api_key:
             raise HTTPException(500, detail="OpenAI not configured. Re-run bootstrap.")
-        client = OpenAI(api_key=api_key)
-        try:
-            resp = client.chat.completions.create(
-                model=provider_model,
-                messages=[{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": prompt}],
-                max_tokens=2000,
-            )
-        except RateLimitError as e:
-            raise HTTPException(429, detail=f"OpenAI quota/rate limit for model '{model}': {e}")
-        except AuthenticationError as e:
-            raise HTTPException(401, detail=f"OpenAI authentication failed: {e}")
-        except PermissionDeniedError as e:
-            raise HTTPException(403, detail=f"OpenAI permission denied for model '{model}': {e}")
-        except NotFoundError as e:
-            raise HTTPException(404, detail=f"OpenAI model '{model}' not found or not enabled for this key: {e}")
-        except APIError as e:
-            raise HTTPException(502, detail=f"OpenAI API error for model '{model}': {e}")
+        from openai import OpenAI
+        client = OpenAI(api_key=api_key, base_url=base_url)
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": prompt}],
+            max_tokens=2000,
+        )
         if resp.usage:
             metrics["tokens"] = {"prompt": resp.usage.prompt_tokens,
                                  "completion": resp.usage.completion_tokens,
                                  "total": resp.usage.total_tokens}
         return parse_json(resp.choices[0].message.content, model), metrics
 
-    # ── OpenAI Codex OAuth ───────────────────────
-    if provider == ModelProvider.OPENAI_CODEX:
-        access_token = await get_openai_codex_access_token()
-        client = OpenAI(api_key=access_token, base_url=OPENAI_CODEX_API_BASE)
-        try:
-            resp = client.chat.completions.create(
-                model=provider_model,
-                messages=[{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": prompt}],
-                max_tokens=2000,
-            )
-        except RateLimitError as e:
-            raise HTTPException(429, detail=f"OpenAI Codex rate limit for model '{model}': {e}")
-        except AuthenticationError as e:
-            raise HTTPException(401, detail=f"OpenAI Codex authentication failed. Reconnect OAuth in bootstrap. {e}")
-        except PermissionDeniedError as e:
-            raise HTTPException(403, detail=f"OpenAI Codex model '{model}' is not available for this account: {e}")
-        except NotFoundError as e:
-            raise HTTPException(404, detail=f"OpenAI Codex model '{model}' was not found for OAuth access: {e}")
-        except APIError as e:
-            raise HTTPException(502, detail=f"OpenAI Codex API error for model '{model}': {e}")
-        if resp.usage:
-            metrics["tokens"] = {"prompt": resp.usage.prompt_tokens,
-                                 "completion": resp.usage.completion_tokens,
-                                 "total": resp.usage.total_tokens}
-        return parse_json(resp.choices[0].message.content, model), metrics
+    # ── OpenAI Codex (ChatGPT OAuth) ─────────────
+    if provider == ModelProvider.CODEX:
+        import time as _t
+        access  = await get_config("openai_codex_access", "")
+        expires = int(await get_config("openai_codex_expires", "0"))
+        if not access or expires <= int(_t.time()):
+            raise HTTPException(500, detail="OpenAI Codex OAuth token expired. Re-authenticate in bootstrap.")
+        from openai import OpenAI
 
-    # ── Copilot ──────────────────────────────────
-    if provider == ModelProvider.COPILOT:
-        token = await get_config("copilot_token")
-        copilot_url = os.getenv("COPILOT_API_URL", "http://localhost:4000")
-        if not token:
-            raise HTTPException(500, detail="Copilot not configured. Re-run bootstrap.")
-        client = OpenAI(api_key=token, base_url=f"{copilot_url}/v1")
-        try:
-            resp = client.chat.completions.create(
-                model=provider_model,
-                messages=[{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": prompt}],
-                max_tokens=2000,
-            )
-        except APIError as e:
-            raise HTTPException(502, detail=f"Copilot backend error via {copilot_url}: {e}")
+        # Use chatgpt.com backend for Codex models
+        codex_model = model.replace("openai-codex/", "")
+        client = OpenAI(
+            api_key=access,
+            base_url="https://chatgpt.com/backend-api",
+        )
+        resp = client.chat.completions.create(
+            model=codex_model,
+            messages=[{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": prompt}],
+            max_tokens=2000,
+        )
         if resp.usage:
             metrics["tokens"] = {"prompt": resp.usage.prompt_tokens,
                                  "completion": resp.usage.completion_tokens,

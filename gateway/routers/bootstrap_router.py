@@ -1,26 +1,14 @@
 """
-Bootstrap router — lưu API keys / OAuth tokens vào SQLite, không dùng .env.
+Bootstrap router — lưu API keys vào SQLite, không dùng .env.
 """
 
-import os
-import secrets
-
 import httpx
-from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from db import (
     get_config, set_config, get_all_config,
-    is_bootstrapped, reset_config, save_oauth_state, pop_oauth_state
-)
-from oauth import (
-    OPENAI_CODEX_API_BASE,
-    OPENAI_CODEX_REDIRECT_URI,
-    build_openai_codex_authorize_url,
-    exchange_openai_codex_code,
-    extract_code_from_callback_url,
-    generate_pkce_pair,
+    is_bootstrapped, reset_config
 )
 
 router = APIRouter()
@@ -33,17 +21,13 @@ GITHUB_TOKEN_URL  = "https://github.com/login/oauth/access_token"
 # ── Schemas ───────────────────────────────────────
 class OpenAISetup(BaseModel):
     api_key: str
-    test_model: str | None = None
 
 class GeminiSetup(BaseModel):
     api_key: str
 
-class OpenAICodexCallback(BaseModel):
-    callback_url: str
-
 class SaveConfig(BaseModel):
-    providers: dict   # {openai: {api_key}, openai_codex: {...}, gemini: {api_key}, copilot: {token}}
-    default_model: str = "openai/gpt-4.1"
+    providers: dict   # {openai: {api_key}, gemini: {api_key}, copilot: {token}}
+    default_model: str = "gpt-4.1"
 
 
 # ── Routes ────────────────────────────────────────
@@ -53,12 +37,11 @@ async def bootstrap_status():
     return {
         "bootstrapped": await is_bootstrapped(),
         "providers": {
-            "openai": bool(cfg.get("openai_key")),
-            "openai_codex": bool(cfg.get("openai_codex_refresh_token")),
-            "gemini": bool(cfg.get("gemini_key")),
+            "openai":  bool(cfg.get("openai_key")),
+            "gemini":  bool(cfg.get("gemini_key")),
             "copilot": bool(cfg.get("copilot_token")),
         },
-        "default_model": cfg.get("default_model", "openai/gpt-4.1"),
+        "default_model": cfg.get("default_model", "gpt-4.1"),
     }
 
 
@@ -71,11 +54,10 @@ async def reset():
 # ── OpenAI ────────────────────────────────────────
 @router.post("/openai/verify")
 async def verify_openai(body: OpenAISetup):
-    headers = {"Authorization": f"Bearer {body.api_key}"}
     async with httpx.AsyncClient() as client:
         resp = await client.get(
             "https://api.openai.com/v1/models",
-            headers=headers,
+            headers={"Authorization": f"Bearer {body.api_key}"},
             timeout=10,
         )
     if resp.status_code != 200:
@@ -87,131 +69,163 @@ async def verify_openai(body: OpenAISetup):
         {m["id"] for m in all_models if not any(k in m["id"] for k in BLOCKED)},
         key=lambda m: (2 if "mini" in m else 3 if "instruct" in m or "preview" in m else 4 if "nano" in m else 1)
     )
+    return {"valid": True, "message": f"OpenAI verified — {len(models)} models", "models": models}
 
-    preferred = [
-        body.test_model,
-        "gpt-4.1-mini",
-        "gpt-4o-mini",
-        "gpt-4.1",
-        "gpt-4o",
-        "gpt-5.4",
-        "gpt-5.3-codex",
-        "codex-mini-latest",
-    ]
-    runtime_model = next((m for m in preferred if m and m in models), None)
-    if not runtime_model:
-        raise HTTPException(400, detail="OpenAI key is valid, but no supported chat model was found for runtime use.")
 
-    async with httpx.AsyncClient() as client:
-        test_resp = await client.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers={**headers, "Content-Type": "application/json"},
-            json={
-                "model": runtime_model,
-                "messages": [{"role": "user", "content": "Reply with OK"}],
-                "max_tokens": 5,
-            },
-            timeout=20,
-        )
+# ── OpenAI Codex OAuth (ChatGPT subscription) ─────
+import secrets as _secrets
+import hashlib as _hashlib
+import base64 as _base64
 
-    if test_resp.status_code == 429:
-        detail = test_resp.json().get("error", {}).get("message", "OpenAI quota exceeded")
-        raise HTTPException(400, detail=f"OpenAI key listed models, but runtime test failed with 429: {detail}")
-    if test_resp.status_code >= 400:
-        detail = test_resp.json().get("error", {}).get("message", f"HTTP {test_resp.status_code}")
-        raise HTTPException(400, detail=f"OpenAI key listed models, but runtime test on {runtime_model} failed: {detail}")
+# In-memory store for ongoing OAuth flows
+_oauth_states: dict = {}
 
-    return {
-        "valid": True,
-        "message": f"OpenAI verified — {len(models)} models, runtime OK on {runtime_model}",
-        "models": [f"openai/{m}" for m in models],
-        "runtime_model": f"openai/{runtime_model}",
+OPENAI_CLIENT_ID  = "app_EMoamEEZ73f0CkXaXp7hrann"
+OPENAI_AUTH_URL   = "https://auth.openai.com/oauth/authorize"
+OPENAI_TOKEN_URL  = "https://auth.openai.com/oauth/token"
+OPENAI_REDIRECT   = "http://127.0.0.1:1455/auth/callback"
+
+
+@router.get("/openai/oauth/start")
+async def openai_oauth_start():
+    """
+    Generate PKCE params + spin up temp HTTP server on port 1455
+    to catch the OAuth callback from OpenAI.
+    """
+    import asyncio
+    import threading
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+    from urllib.parse import urlencode, urlparse, parse_qs
+
+    code_verifier  = _secrets.token_urlsafe(64)
+    digest         = _hashlib.sha256(code_verifier.encode()).digest()
+    code_challenge = _base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
+    state          = _secrets.token_hex(16)
+
+    _oauth_states[state] = {"verifier": code_verifier, "done": False, "error": None}
+    flow = _oauth_states[state]
+
+    # Spin up temp server on 1455 in background thread
+    class CallbackHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            parsed = urlparse(self.path)
+            if parsed.path != "/auth/callback":
+                self.send_response(404); self.end_headers(); return
+
+            params   = parse_qs(parsed.query)
+            cb_code  = params.get("code", [None])[0]
+            cb_state = params.get("state", [None])[0]
+            cb_error = params.get("error", [None])[0]
+
+            if cb_error:
+                flow["error"] = cb_error
+                flow["done"]  = True
+                self.send_response(200); self.send_header("Content-Type","text/html"); self.end_headers()
+                self.wfile.write(b"<html><body><h2>Auth error</h2><script>window.close()</script></body></html>")
+                return
+
+            if cb_state != state:
+                flow["error"] = "state_mismatch"
+                flow["done"]  = True
+                self.send_response(400); self.end_headers(); return
+
+            # Exchange code for token (sync inside handler thread)
+            import urllib.request, json as _j
+            payload = _j.dumps({
+                "grant_type":    "authorization_code",
+                "client_id":     OPENAI_CLIENT_ID,
+                "code":          cb_code,
+                "redirect_uri":  OPENAI_REDIRECT,
+                "code_verifier": flow["verifier"],
+            }).encode()
+            req = urllib.request.Request(
+                OPENAI_TOKEN_URL,
+                data=payload,
+                headers={"Content-Type": "application/json"},
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=15) as r:
+                    token_data = _j.loads(r.read())
+                flow["token_data"] = token_data
+            except Exception as e:
+                flow["error"] = str(e)
+
+            flow["done"] = True
+            self.send_response(200); self.send_header("Content-Type","text/html"); self.end_headers()
+            self.wfile.write(b"""<html><body style="font-family:monospace;background:#0a0a0f;color:#00ff9d;padding:40px;text-align:center">
+                <h2>Connected!</h2><p>You can close this tab.</p>
+                <script>window.opener?.postMessage({type:'openai_codex_auth_done'},'*');setTimeout(()=>window.close(),1000)</script>
+            </body></html>""")
+
+        def log_message(self, *args): pass  # suppress logs
+
+    def run_server():
+        try:
+            srv = HTTPServer(("127.0.0.1", 1455), CallbackHandler)
+            srv.timeout = 300  # 5 min timeout
+            srv.handle_request()  # handle exactly 1 request then stop
+        except Exception:
+            pass
+
+    t = threading.Thread(target=run_server, daemon=True)
+    t.start()
+
+    params = {
+        "response_type":         "code",
+        "client_id":             OPENAI_CLIENT_ID,
+        "redirect_uri":          OPENAI_REDIRECT,
+        "scope":                 "openid profile email offline_access model.request api.model.read",
+        "state":                 state,
+        "code_challenge":        code_challenge,
+        "code_challenge_method": "S256",
     }
+    url = OPENAI_AUTH_URL + "?" + urlencode(params)
+    return {"url": url, "state": state}
+
+
+@router.get("/openai/oauth/poll")
+async def openai_oauth_poll(state: str):
+    """Poll whether OAuth flow completed."""
+    import time as _time
+    flow = _oauth_states.get(state)
+    if not flow:
+        return {"status": "not_found"}
+    if flow.get("error"):
+        _oauth_states.pop(state, None)
+        return {"status": "error", "error": flow["error"]}
+    if flow.get("done") and flow.get("token_data"):
+        td = flow.pop("token_data")
+        _oauth_states.pop(state, None)
+        access  = td.get("access_token", "")
+        refresh = td.get("refresh_token", "")
+        exp     = td.get("expires_in", 3600)
+        await set_config("openai_codex_access",  access)
+        await set_config("openai_codex_refresh", refresh)
+        await set_config("openai_codex_expires", str(int(_time.time()) + exp))
+        return {"status": "success"}
+    return {"status": "pending"}
+
+
+@router.get("/openai/oauth/callback")
+async def openai_oauth_callback(code: str = "", state: str = "", error: str = ""):
+    """Fallback callback trên gateway port (backup)."""
+    from fastapi.responses import HTMLResponse
+    if error:
+        return HTMLResponse(f"<html><body>Error: {error}</body></html>")
+    return HTMLResponse("<html><body>Please use the primary callback on port 1455.</body></html>")
+
+
+@router.get("/openai/oauth/status")
+async def openai_oauth_status():
+    """Check if Codex OAuth token is valid."""
+    import time as _time
+    access  = await get_config("openai_codex_access",  "")
+    expires = await get_config("openai_codex_expires", "0")
+    valid   = bool(access) and int(expires) > int(_time.time())
+    return {"valid": valid, "has_token": bool(access)}
 
 
 # ── Gemini ────────────────────────────────────────
-@router.post("/openai-codex/start")
-async def start_openai_codex_oauth(request: Request):
-    state = secrets.token_urlsafe(24)
-    verifier, challenge = generate_pkce_pair()
-    authorize_url = build_openai_codex_authorize_url(state=state, code_challenge=challenge)
-    await save_oauth_state("openai-codex", state, {
-        "code_verifier": verifier,
-        "redirect_uri": OPENAI_CODEX_REDIRECT_URI,
-        "created_from": str(request.base_url),
-    })
-    return {
-        "authorize_url": authorize_url,
-        "state": state,
-        "redirect_uri": OPENAI_CODEX_REDIRECT_URI,
-        "instructions": "Sign in with ChatGPT/Codex, then paste the final callback URL here if the browser does not return automatically.",
-    }
-
-
-async def _store_openai_codex_tokens(token_data: dict):
-    await set_config("openai_codex_access_token", token_data["access_token"])
-    await set_config("openai_codex_refresh_token", token_data["refresh_token"])
-    await set_config("openai_codex_expires_at", str(token_data["expires_at"]))
-    await set_config("openai_codex_account_id", token_data.get("account_id", ""))
-    await set_config("openai_codex_token_type", token_data.get("token_type", "Bearer"))
-    await set_config("openai_codex_scope", token_data.get("scope", ""))
-
-
-async def _exchange_openai_codex_callback(callback_url: str) -> dict:
-    params = extract_code_from_callback_url(callback_url)
-    if params.get("error"):
-        detail = params.get("error_description") or params["error"]
-        raise HTTPException(400, detail=f"OpenAI OAuth was declined: {detail}")
-    code = params.get("code")
-    state = params.get("state")
-    if not code or not state:
-        raise HTTPException(400, detail="Callback URL must include both code and state.")
-
-    saved = await pop_oauth_state("openai-codex", state)
-    if not saved:
-        raise HTTPException(400, detail="OAuth session expired or is invalid. Start the login flow again.")
-
-    try:
-        token_data = await exchange_openai_codex_code(
-            code=code,
-            code_verifier=saved["code_verifier"],
-            redirect_uri=saved.get("redirect_uri") or OPENAI_CODEX_REDIRECT_URI,
-        )
-    except httpx.HTTPStatusError as exc:
-        detail = exc.response.text[:500] if exc.response is not None else str(exc)
-        raise HTTPException(400, detail=f"OpenAI token exchange failed. {detail}")
-    except httpx.HTTPError as exc:
-        raise HTTPException(502, detail=f"OpenAI OAuth network error: {exc}")
-
-    await _store_openai_codex_tokens(token_data)
-
-    return {
-        "valid": True,
-        "message": "OpenAI Codex OAuth connected successfully.",
-        "account_id": token_data.get("account_id", ""),
-        "expires_at": token_data["expires_at"],
-        "api_base": OPENAI_CODEX_API_BASE,
-    }
-
-
-@router.post("/openai-codex/exchange")
-async def exchange_openai_codex_callback(body: OpenAICodexCallback):
-    return await _exchange_openai_codex_callback(body.callback_url)
-
-
-@router.get("/auth/callback", response_class=HTMLResponse)
-async def openai_codex_callback(code: str = "", state: str = "", error: str = "", error_description: str = ""):
-    callback_url = f"{OPENAI_CODEX_REDIRECT_URI}?code={code}&state={state}&error={error}&error_description={error_description}"
-    try:
-        result = await _exchange_openai_codex_callback(callback_url)
-        return f"<html><body style='font-family: sans-serif; padding: 24px;'><h2>OpenAI Codex connected</h2><p>{result['message']}</p><p>You can close this tab and return to the gateway setup.</p></body></html>"
-    except HTTPException as exc:
-        return HTMLResponse(
-            f"<html><body style='font-family: sans-serif; padding: 24px;'><h2>OAuth failed</h2><p>{exc.detail}</p><p>Return to the gateway setup page and try again.</p></body></html>",
-            status_code=exc.status_code,
-        )
-
-
 @router.post("/gemini/verify")
 async def verify_gemini(body: GeminiSetup):
     async with httpx.AsyncClient() as client:
@@ -231,87 +245,11 @@ async def verify_gemini(body: GeminiSetup):
         if any(m["name"].replace("models/","").startswith(p) for p in ALLOWED)
            and not any(k in m["name"] for k in BLOCKED)
     })
-    return {"valid": True, "message": f"Gemini verified — {len(models)} models", "models": [f"gemini/{m}" for m in models]}
+    return {"valid": True, "message": f"Gemini verified — {len(models)} models", "models": models}
 
 
-# ── GitHub Copilot Device Flow ────────────────────
-async def ensure_copilot_backend() -> str:
-    copilot_url = os.getenv("COPILOT_API_URL", "http://localhost:4000")
-    async with httpx.AsyncClient() as client:
-        try:
-            resp = await client.get(f"{copilot_url}/v1/models", timeout=5)
-        except httpx.HTTPError:
-            raise HTTPException(
-                503,
-                detail=(
-                    f"Copilot backend is not running at {copilot_url}. "
-                    f"This gateway expects an OpenAI-compatible Copilot bridge exposing /v1/models there."
-                ),
-            )
-    if resp.status_code != 200:
-        raise HTTPException(
-            503,
-            detail=(
-                f"Copilot backend at {copilot_url} responded with HTTP {resp.status_code}. "
-                f"Expected an OpenAI-compatible bridge."
-            ),
-        )
-    return copilot_url
-
-
-@router.get("/copilot/status")
-async def copilot_status():
-    try:
-        url = await ensure_copilot_backend()
-        return {"available": True, "url": url}
-    except HTTPException as e:
-        return {"available": False, "detail": e.detail}
-
-
-@router.post("/copilot/start")
-async def copilot_device_start():
-    await ensure_copilot_backend()
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            GITHUB_DEVICE_URL,
-            data={"client_id": GITHUB_CLIENT_ID, "scope": "read:user"},
-            headers={"Accept": "application/json"}, timeout=10,
-        )
-    if resp.status_code != 200:
-        raise HTTPException(502, detail="Failed to start GitHub device flow")
-    d = resp.json()
-    return {
-        "device_code":      d["device_code"],
-        "user_code":        d["user_code"],
-        "verification_uri": d["verification_uri"],
-        "expires_in":       d["expires_in"],
-        "interval":         d.get("interval", 5),
-    }
-
-
-@router.post("/copilot/poll")
-async def copilot_device_poll(body: dict):
-    device_code = body.get("device_code")
-    if not device_code:
-        raise HTTPException(400, detail="device_code required")
-    await ensure_copilot_backend()
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            GITHUB_TOKEN_URL,
-            data={
-                "client_id":   GITHUB_CLIENT_ID,
-                "device_code": device_code,
-                "grant_type":  "urn:ietf:params:oauth:grant-type:device_code",
-            },
-            headers={"Accept": "application/json"}, timeout=10,
-        )
-    data = resp.json()
-    if "access_token" in data:
-        return {"status": "success", "token": data["access_token"]}
-    error = data.get("error", "unknown")
-    if error in ("expired_token", "access_denied"):
-        raise HTTPException(400, detail=f"Device flow failed: {error}")
-    return {"status": "slow_down" if error == "slow_down" else "pending"}
+# GitHub Copilot OAuth bị GitHub block (403 Forbidden).
+# Removed — dùng OpenAI hoặc Gemini thay thế.
 
 
 # ── Save — ghi vào SQLite ─────────────────────────
@@ -319,15 +257,6 @@ async def copilot_device_poll(body: dict):
 async def save_bootstrap(body: SaveConfig):
     if body.providers.get("openai", {}).get("api_key"):
         await set_config("openai_key", body.providers["openai"]["api_key"])
-
-    if body.providers.get("openai_codex", {}).get("access_token") not in (None, "", "stored-via-exchange"):
-        await set_config("openai_codex_access_token", body.providers["openai_codex"]["access_token"])
-    if body.providers.get("openai_codex", {}).get("refresh_token") not in (None, "", "stored-via-exchange"):
-        await set_config("openai_codex_refresh_token", body.providers["openai_codex"]["refresh_token"])
-    if body.providers.get("openai_codex", {}).get("expires_at"):
-        await set_config("openai_codex_expires_at", str(body.providers["openai_codex"]["expires_at"]))
-    if body.providers.get("openai_codex", {}).get("account_id") is not None:
-        await set_config("openai_codex_account_id", body.providers["openai_codex"].get("account_id", ""))
 
     if body.providers.get("gemini", {}).get("api_key"):
         await set_config("gemini_key", body.providers["gemini"]["api_key"])
@@ -342,3 +271,5 @@ async def save_bootstrap(body: SaveConfig):
         "bootstrapped":  await is_bootstrapped(),
         "default_model": body.default_model,
     }
+
+

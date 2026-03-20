@@ -271,26 +271,22 @@
     </div>
 
     <!-- OpenAI Codex OAuth -->
-    <div class="card" style="animation-delay:0.09s">
+    <div class="card" style="animation-delay:0.08s">
       <div class="card-header">
         <div class="card-title">
-          <div class="provider-icon">◎</div>
-          OpenAI Codex OAuth
+          <div class="provider-icon">⬡</div>
+          OpenAI Codex <span style="font-size:10px;color:var(--dim);margin-left:4px">(ChatGPT subscription)</span>
         </div>
-        <span class="badge badge-oauth" id="badge-openai-codex">ChatGPT OAuth</span>
+        <span class="badge badge-oauth" id="badge-codex">OAuth PKCE</span>
       </div>
-      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
-        <button class="btn btn-ghost" onclick="startOpenAICodexFlow()" id="btn-openai-codex-start">Connect with ChatGPT</button>
-        <button class="btn btn-ghost" onclick="toggleCodexManual()">Paste callback URL</button>
-      </div>
-      <div class="msg info" id="msg-openai-codex" style="display:block;">Uses ChatGPT/Codex OAuth. Good for <code style="color:var(--accent)">openai-codex/*</code> models, separate from API-key <code style="color:var(--accent)">openai/*</code>.</div>
-      <div class="input-group" id="codex-manual-box" style="display:none;margin-top:12px;">
-        <label>Callback URL</label>
-        <input type="text" id="openai-codex-callback" placeholder="http://127.0.0.1:1455/auth/callback?code=...&state=..." autocomplete="off"
-               onkeydown="if(event.key==='Enter') exchangeOpenAICodexCallback()">
-        <div class="key-hint"><span>If auto-return does not work, paste the full redirect URL here.</span></div>
-        <div style="margin-top:10px;"><button class="btn btn-ghost" onclick="exchangeOpenAICodexCallback()">Finish OAuth</button></div>
-      </div>
+      <p style="font-size:11px;color:var(--dim);margin-bottom:14px;line-height:1.7">
+        Use your ChatGPT Plus/Pro subscription — no API key needed.<br>
+        Includes <strong style="color:var(--text)">gpt-5.4, gpt-5.3-codex</strong> at flat subscription rate.
+      </p>
+      <button class="btn btn-ghost" onclick="startCodexOAuth()" id="btn-codex-start">
+        Sign in with ChatGPT
+      </button>
+      <div class="msg" id="msg-codex"></div>
     </div>
 
     <!-- Gemini -->
@@ -314,33 +310,6 @@
         <a href="https://aistudio.google.com/app/apikey" target="_blank">Get Gemini key at aistudio.google.com →</a>
       </div>
       <div class="msg" id="msg-gemini"></div>
-    </div>
-
-    <!-- Copilot -->
-    <div class="card" style="animation-delay:0.15s">
-      <div class="card-header">
-        <div class="card-title">
-          <div class="provider-icon">⌘</div>
-          GitHub Copilot
-        </div>
-        <span class="badge badge-oauth" id="badge-copilot">OAuth Device Flow</span>
-      </div>
-      <button class="btn btn-ghost" onclick="startCopilotFlow()" id="btn-copilot-start">
-        Connect GitHub account
-      </button>
-      <div class="device-box" id="device-box">
-        <p class="device-instruction">
-          Go to <a href="https://github.com/login/device" target="_blank">github.com/login/device</a><br>
-          and enter this code:
-        </p>
-        <div class="device-code" id="device-code" onclick="copyCode()" title="Click to copy">——————</div>
-        <p class="device-instruction">Click the code to copy it to clipboard</p>
-        <div class="poll-status">
-          <div class="spinner active" id="poll-spinner"></div>
-          <span id="poll-text">Waiting for authorization...</span>
-        </div>
-      </div>
-      <div class="msg" id="msg-copilot"></div>
     </div>
 
     <div class="nav">
@@ -400,12 +369,9 @@
 <script>
   const state = {
     openai:       { key: null, verified: false, models: [], selectedModel: null },
-    openaiCodex:  { verified: false, accessToken: null, refreshToken: null, expiresAt: null, accountId: null, models: ['openai-codex/gpt-5.4', 'openai-codex/gpt-5.3-codex', 'openai-codex/gpt-5.3-codex-spark'], selectedModel: 'openai-codex/gpt-5.4' },
     gemini:       { key: null, verified: false, models: [] },
-    copilot:      { token: null, verified: false },
+    codex:        { verified: false },
     defaultModel: null,
-    deviceCode:   null,
-    pollInterval: null,
   };
 
   // ── API ───────────────────────────────────────
@@ -440,7 +406,7 @@
     if (!key) { showMsg(msg, 'error', 'Enter an API key first'); return; }
 
     btn.disabled = true; btn.textContent = 'Verifying...';
-    showMsg(msg, 'info', 'Connecting to OpenAI and testing a runtime model...');
+    showMsg(msg, 'info', 'Connecting to OpenAI...');
 
     try {
       const data = await api('POST', '/openai/verify', { api_key: key });
@@ -448,8 +414,8 @@
       state.openai.key      = key;
       state.openai.verified = true;
       state.openai.models   = data.models || [];
-      state.openai.selectedModel = data.runtime_model || state.openai.models[0] || null;
-      if (!state.defaultModel) state.defaultModel = state.openai.selectedModel;
+      // default: first model
+      if (state.openai.models.length > 0) state.openai.selectedModel = state.openai.models[0];
 
       inp.classList.remove('has-error'); inp.classList.add('has-success');
       document.getElementById('badge-openai').textContent = 'Verified ✓';
@@ -459,7 +425,6 @@
       renderOpenAIModels(data.models);
       checkProviders();
     } catch(e) {
-      state.openai = { key: null, verified: false, models: [], selectedModel: null };
       inp.classList.add('has-error');
       showMsg(msg, 'error', e.message);
     } finally {
@@ -483,49 +448,6 @@
       list.appendChild(div);
     });
     list.classList.add('active');
-  }
-
-  // ── OpenAI Codex OAuth ───────────────────────
-  function toggleCodexManual() {
-    const box = document.getElementById('codex-manual-box');
-    box.style.display = box.style.display === 'none' ? 'block' : 'none';
-  }
-
-  async function startOpenAICodexFlow() {
-    const btn = document.getElementById('btn-openai-codex-start');
-    const msg = document.getElementById('msg-openai-codex');
-    btn.disabled = true; btn.textContent = 'Starting...';
-    try {
-      const data = await api('POST', '/openai-codex/start');
-      showMsg(msg, 'info', 'Browser login opened. After approval, you should return automatically. If not, paste the callback URL below.');
-      document.getElementById('codex-manual-box').style.display = 'block';
-      window.open(data.authorize_url, '_blank');
-    } catch (e) {
-      showMsg(msg, 'error', e.message);
-    } finally {
-      btn.disabled = false; btn.textContent = 'Connect with ChatGPT';
-    }
-  }
-
-  async function exchangeOpenAICodexCallback() {
-    const input = document.getElementById('openai-codex-callback');
-    const msg = document.getElementById('msg-openai-codex');
-    const callbackUrl = input.value.trim();
-    if (!callbackUrl) { showMsg(msg, 'error', 'Paste the full callback URL first'); return; }
-    showMsg(msg, 'info', 'Exchanging OAuth callback with OpenAI...');
-    try {
-      const data = await api('POST', '/openai-codex/exchange', { callback_url: callbackUrl });
-      state.openaiCodex.verified = true;
-      state.openaiCodex.accountId = data.account_id || null;
-      state.openaiCodex.expiresAt = data.expires_at || null;
-      if (!state.defaultModel) state.defaultModel = state.openaiCodex.selectedModel;
-      document.getElementById('badge-openai-codex').textContent = 'Connected ✓';
-      document.getElementById('badge-openai-codex').className = 'badge badge-verified';
-      showMsg(msg, 'success', data.message + (data.account_id ? ` Account: ${data.account_id}` : ''));
-      checkProviders();
-    } catch (e) {
-      showMsg(msg, 'error', e.message);
-    }
   }
 
   // ── Gemini ────────────────────────────────────
@@ -557,15 +479,11 @@
     const box = document.getElementById('device-box');
     btn.disabled = true; btn.textContent = 'Starting...';
     try {
-      const status = await api('GET', '/copilot/status');
-      if (!status.available) throw new Error(status.detail || 'Copilot backend unavailable');
-
       const data = await api('POST', '/copilot/start');
       state.deviceCode = data.device_code;
       document.getElementById('device-code').textContent = data.user_code;
       box.classList.add('active');
       btn.style.display = 'none';
-      showMsg(document.getElementById('msg-copilot'), 'info', 'Backend detected at ' + status.url + '. Waiting for GitHub authorization...');
       window.open(data.verification_uri, '_blank');
       const interval = (data.interval || 5) * 1000;
       state.pollInterval = setInterval(() => pollCopilot(data.device_code), interval);
@@ -580,13 +498,13 @@
       const data = await api('POST', '/copilot/poll', { device_code: deviceCode });
       if (data.status === 'success') {
         clearInterval(state.pollInterval);
-        state.copilot = { token: data.token, verified: true };
+        state.codex = { verified: true }; // OAuth done via callback
         document.getElementById('poll-spinner').classList.remove('active');
         document.getElementById('poll-text').textContent = 'Authorized ✓';
         document.getElementById('poll-text').style.color = 'var(--accent)';
         document.getElementById('badge-copilot').textContent = 'Connected ✓';
         document.getElementById('badge-copilot').className = 'badge badge-verified';
-        showMsg(document.getElementById('msg-copilot'), 'success', 'GitHub Copilot token acquired and backend is reachable');
+        showMsg(document.getElementById('msg-copilot'), 'success', 'GitHub Copilot connected');
         checkProviders();
       } else if (data.status === 'slow_down') {
         clearInterval(state.pollInterval);
@@ -608,7 +526,7 @@
 
   // ── Provider check ────────────────────────────
   function checkProviders() {
-    const any = state.openai.verified || state.openaiCodex.verified || state.gemini.verified || state.copilot.verified;
+    const any = state.openai.verified || state.gemini.verified || state.codex.verified;
     document.getElementById('btn-next-1').disabled = !any;
     if (any) {
       document.getElementById('provider-hint').textContent = 'Ready to continue';
@@ -616,8 +534,6 @@
       if (!state.defaultModel) {
         if (state.openai.verified && state.openai.selectedModel)
           state.defaultModel = state.openai.selectedModel;
-        else if (state.openaiCodex.verified && state.openaiCodex.selectedModel)
-          state.defaultModel = state.openaiCodex.selectedModel;
         else if (state.gemini.verified && state.gemini.models.length)
           state.defaultModel = state.gemini.models[0];
       }
@@ -648,16 +564,6 @@
       </div>`;
     }
 
-    // OpenAI Codex OAuth
-    if (state.openaiCodex.verified && state.openaiCodex.models.length) {
-      const options = state.openaiCodex.models.map(m => `
-      <div class="model-option ${state.defaultModel === m ? 'selected' : ''}" onclick="selectDefault('${m}')">
-        <div class="model-name">${m}</div>
-        <div class="model-provider">OpenAI Codex OAuth</div>
-      </div>`).join('');
-      html += `<div style="margin-bottom:20px;"><label>OpenAI Codex Models</label><div class="model-grid">${options}</div></div>`;
-    }
-
     // Gemini
     if (state.gemini.verified && state.gemini.models.length) {
       const options = state.gemini.models.map(m => `
@@ -668,15 +574,7 @@
       html += `<div style="margin-bottom:20px;"><label>Gemini Models</label><div class="model-grid">${options}</div></div>`;
     }
 
-    // Copilot
-    if (state.copilot.verified) {
-      const options = COPILOT_MODELS.map(m => `
-      <div class="model-option ${state.defaultModel === m.id ? 'selected' : ''}" onclick="selectDefault('${m.id}')">
-        <div class="model-name">${m.name}</div>
-        <div class="model-provider">${m.provider}</div>
-      </div>`).join('');
-      html += `<div><label>Copilot Models</label><div class="model-grid">${options}</div></div>`;
-    }
+
 
     el.innerHTML = html;
   }
@@ -684,11 +582,8 @@
   function selectDefault(id) {
     state.defaultModel = id;
     // Deselect OpenAI model if switching away
-    if (id.startsWith('openai/')) {
+    if (!id.startsWith('copilot') && !id.startsWith('gemini')) {
       state.openai.selectedModel = id;
-    }
-    if (id.startsWith('openai-codex/')) {
-      state.openaiCodex.selectedModel = id;
     }
     buildStep2();
   }
@@ -701,20 +596,15 @@
     else
       lines.push(`<span class="skip">–</span> OpenAI — skipped`);
 
-    if (state.openaiCodex.verified)
-      lines.push(`<span class="ok">✓</span> OpenAI Codex OAuth — connected${state.openaiCodex.accountId ? ` (${state.openaiCodex.accountId})` : ''}`);
-    else
-      lines.push(`<span class="skip">–</span> OpenAI Codex OAuth — skipped`);
-
     if (state.gemini.verified)
       lines.push(`<span class="ok">✓</span> Google Gemini — key configured (${state.gemini.models.length} models)`);
     else
       lines.push(`<span class="skip">–</span> Google Gemini — skipped`);
 
-    if (state.copilot.verified)
-      lines.push(`<span class="ok">✓</span> GitHub Copilot — OAuth token acquired`);
+    if (state.codex.verified)
+      lines.push(`<span class="ok">✓</span> OpenAI Codex — ChatGPT OAuth authorized`);
     else
-      lines.push(`<span class="skip">–</span> GitHub Copilot — skipped`);
+      lines.push(`<span class="skip">–</span> OpenAI Codex — skipped`);
 
     lines.push(`<br><span class="ok">◈</span> Default model: <strong style="color:var(--text)">${state.defaultModel || '—'}</strong>`);
     document.getElementById('summary').innerHTML = lines.join('<br>');
@@ -728,14 +618,8 @@
 
     const providers = {};
     if (state.openai.verified)  providers.openai  = { api_key: state.openai.key };
-    if (state.openaiCodex.verified) providers.openai_codex = {
-      access_token: 'stored-via-exchange',
-      refresh_token: 'stored-via-exchange',
-      expires_at: state.openaiCodex.expiresAt,
-      account_id: state.openaiCodex.accountId,
-    };
     if (state.gemini.verified)  providers.gemini  = { api_key: state.gemini.key };
-    if (state.copilot.verified) providers.copilot = { token: state.copilot.token };
+    // Codex token already saved to DB via callback — no extra action needed
 
     try {
       await api('POST', '/save', { providers, default_model: state.defaultModel });
@@ -743,12 +627,12 @@
       document.getElementById('complete').classList.add('active');
 
       const logs = [];
-      if (state.openai.verified)  logs.push(`<span class="ok">✓</span> OPENAI_API_KEY stored in SQLite config`);
-      if (state.openaiCodex.verified) logs.push(`<span class="ok">✓</span> OPENAI_CODEX OAuth refresh token stored in SQLite config`);
-      if (state.gemini.verified)  logs.push(`<span class="ok">✓</span> GEMINI_API_KEY stored in SQLite config`);
-      if (state.copilot.verified) logs.push(`<span class="ok">✓</span> COPILOT_TOKEN stored in SQLite config`);
+      if (state.openai.verified)  logs.push(`<span class="ok">✓</span> OPENAI_API_KEY written`);
+      if (state.gemini.verified)  logs.push(`<span class="ok">✓</span> GEMINI_API_KEY written`);
+      if (state.codex.verified) logs.push(`<span class="ok">✓</span> OpenAI Codex OAuth saved`);
       logs.push(`<span class="ok">✓</span> DEFAULT_MODEL=${state.defaultModel}`);
-      logs.push(`<span class="ok">✓</span> Gateway config updated`);
+      logs.push(`<span class="ok">✓</span> .env written to /config/.env`);
+      logs.push(`<span class="ok">✓</span> Gateway restarting...`);
       document.getElementById('complete-log').innerHTML = logs.join('<br>');
 
       setTimeout(checkGatewayReady, 3000);
@@ -775,6 +659,50 @@
   function showMsg(el, type, text) {
     el.className = 'msg ' + type;
     el.textContent = text;
+  }
+
+
+  // ── OpenAI Codex OAuth ────────────────────────────
+  async function startCodexOAuth() {
+    const btn = document.getElementById('btn-codex-start');
+    const msg = document.getElementById('msg-codex');
+    btn.disabled = true;
+    btn.textContent = 'Opening browser...';
+    showMsg(msg, 'info', 'Opening ChatGPT login...');
+
+    try {
+      const d = await api('GET', '/openai/oauth/start');
+      window.open(d.url, '_blank', 'width=600,height=700');
+      showMsg(msg, 'info', 'Waiting for authorization...');
+
+      // Poll gateway until token saved
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => { clearInterval(poll); reject(new Error('Timed out after 5min')); }, 300000);
+        const poll  = setInterval(async () => {
+          try {
+            const s = await api('GET', '/openai/oauth/poll?state=' + d.state);
+            if (s.status === 'success') {
+              clearTimeout(timer); clearInterval(poll); resolve();
+            } else if (s.status === 'error') {
+              clearTimeout(timer); clearInterval(poll); reject(new Error(s.error));
+            }
+          } catch(e) {}
+        }, 2000);
+      });
+
+      state.codex = { verified: true };
+      document.getElementById('badge-codex').textContent = 'Connected ✓';
+      document.getElementById('badge-codex').className = 'badge badge-verified';
+      showMsg(msg, 'success', 'ChatGPT OAuth authorized ✓');
+      btn.textContent = 'Re-authenticate';
+      btn.disabled = false;
+      checkProviders();
+
+    } catch(e) {
+      btn.disabled = false;
+      btn.textContent = 'Sign in with ChatGPT';
+      showMsg(msg, 'error', e.message);
+    }
   }
 
   checkProviders();

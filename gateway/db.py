@@ -3,14 +3,10 @@ Single SQLite DB cho toàn bộ gateway state.
 Tables:
   - projects  : project registry
   - config    : key-value store cho API keys, model defaults, etc.
-  - oauth_states : temporary PKCE login state during bootstrap
 """
 
-import json
-import time
-from pathlib import Path
-
 import aiosqlite
+from pathlib import Path
 
 _DB_PATH: Path | None = None
 
@@ -50,15 +46,6 @@ async def init_db(config_dir: Path):
                          )
                          """)
 
-        await db.execute("""
-                         CREATE TABLE IF NOT EXISTS oauth_states (
-                                                                 provider   TEXT NOT NULL,
-                                                                 state      TEXT PRIMARY KEY,
-                                                                 payload    TEXT NOT NULL,
-                                                                 created_at INTEGER NOT NULL
-                             )
-                         """)
-
         # Seed infra defaults nếu chưa có
         await db.execute("""
                          INSERT OR IGNORE INTO config (key, value) VALUES
@@ -67,13 +54,8 @@ async def init_db(config_dir: Path):
                 ('ollama_host',  'ollama'),
                 ('ollama_port',  '11434'),
                 ('embed_model',  'nomic-embed-text'),
-                ('default_model','openai/gpt-4.1')
+                ('default_model','gpt-4.1')
                          """)
-
-        await db.execute(
-            "DELETE FROM oauth_states WHERE created_at < ?",
-            (int(time.time()) - 3600,)
-        )
 
         await db.commit()
 
@@ -111,18 +93,13 @@ async def get_all_config() -> dict:
 
 
 async def is_bootstrapped() -> bool:
-    """Gateway coi là bootstrapped nếu có ít nhất 1 provider credential."""
+    """Gateway coi là bootstrapped nếu có OpenAI hoặc Gemini key."""
     cfg = await get_all_config()
-    return any([
-        cfg.get("openai_key"),
-        cfg.get("openai_codex_refresh_token"),
-        cfg.get("gemini_key"),
-        cfg.get("copilot_token"),
-    ])
+    return bool(cfg.get("openai_key") or cfg.get("gemini_key"))
 
 
 async def reset_config():
-    """Xóa tất cả provider credentials, giữ lại infra defaults."""
+    """Xóa tất cả provider keys, giữ lại infra defaults."""
     INFRA_KEYS = {"chroma_host", "chroma_port", "ollama_host", "ollama_port", "embed_model", "default_model"}
     async with aiosqlite.connect(get_db_path()) as db:
         async with db.execute("SELECT key FROM config") as cur:
@@ -130,29 +107,7 @@ async def reset_config():
         for (key,) in rows:
             if key not in INFRA_KEYS:
                 await db.execute("DELETE FROM config WHERE key = ?", (key,))
-        await db.execute("DELETE FROM oauth_states")
         await db.commit()
-
-
-async def save_oauth_state(provider: str, state: str, payload: dict):
-    async with aiosqlite.connect(get_db_path()) as db:
-        await db.execute(
-            "INSERT OR REPLACE INTO oauth_states (provider, state, payload, created_at) VALUES (?, ?, ?, ?)",
-            (provider, state, json.dumps(payload), int(time.time())),
-        )
-        await db.commit()
-
-
-async def pop_oauth_state(provider: str, state: str) -> dict | None:
-    async with aiosqlite.connect(get_db_path()) as db:
-        async with db.execute(
-                "SELECT payload FROM oauth_states WHERE provider = ? AND state = ?",
-                (provider, state),
-        ) as cur:
-            row = await cur.fetchone()
-        await db.execute("DELETE FROM oauth_states WHERE provider = ? AND state = ?", (provider, state))
-        await db.commit()
-    return json.loads(row[0]) if row else None
 
 
 # ── Project helpers ────────────────────────────────
