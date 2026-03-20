@@ -10,3 +10,4 @@ venv/
 ENV/
 # macOS system files
 .DS_Store
+/projects

@@ -1,9 +1,11 @@
 """
 OpenClaw Gateway — entrypoint.
 Bootstrap state đọc từ SQLite mỗi request — không cache, không .env.
+Dùng lifespan để init DB đúng cách với uvloop.
 """
 
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -15,16 +17,20 @@ from db import init_db, is_bootstrapped
 CONFIG_DIR = Path(os.getenv("CONFIG_DIR", "/config"))
 STATIC_DIR = Path(__file__).parent / "bootstrap" / "static"
 
-app = FastAPI(title="OpenClaw Gateway")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup — chạy trong event loop của uvicorn/uvloop, không conflict
+    await init_db(CONFIG_DIR)
+    yield
+    # Shutdown (không cần làm gì)
+
+
+app = FastAPI(title="OpenClaw Gateway", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
-@app.on_event("startup")
-async def startup():
-    await init_db(CONFIG_DIR)
-
-
-# ── Middleware ────────────────────────────────────
+# ── Middleware ─────────────────────────────────────
 ALWAYS_ALLOW = ("/api/bootstrap", "/health", "/static", "/")
 
 @app.middleware("http")
@@ -58,8 +64,7 @@ async def root():
 
 @app.get("/health")
 async def health():
-    bootstrapped = await is_bootstrapped()
-    return {"status": "ok", "bootstrapped": bootstrapped}
+    return {"status": "ok", "bootstrapped": await is_bootstrapped()}
 
 
 @app.get("/skill.md")

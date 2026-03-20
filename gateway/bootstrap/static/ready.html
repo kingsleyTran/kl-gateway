@@ -249,9 +249,68 @@
     .empty .ei{font-size:28px;margin-bottom:10px;opacity:.3;}
     .empty p{font-size:11px;line-height:1.8;}
 
+    /* Thinking steps */
+    .thinking-block{background:var(--surface2);border:1px solid var(--border);border-radius:2px;margin-top:8px;overflow:hidden;}
+    .thinking-toggle{font-size:10px;color:var(--dim);padding:6px 10px;cursor:pointer;display:flex;align-items:center;gap:6px;user-select:none;}
+    .thinking-toggle:hover{color:var(--text);}
+    .thinking-toggle .arrow{transition:transform .2s;display:inline-block;}
+    .thinking-toggle.open .arrow{transform:rotate(90deg);}
+    .thinking-steps{display:none;padding:6px 10px 10px;}
+    .thinking-toggle.open + .thinking-steps{display:block;}
+    .step-row{display:flex;align-items:flex-start;gap:8px;padding:4px 0;font-size:11px;border-bottom:1px solid rgba(30,30,46,.4);}
+    .step-row:last-child{border-bottom:none;}
+    .step-icon{width:16px;height:16px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:10px;margin-top:1px;}
+    .step-icon.running{animation:spin-step .8s linear infinite;}
+    .step-icon.done{color:var(--accent);}
+    .step-icon.error{color:var(--error);}
+    .step-body{flex:1;min-width:0;}
+    .step-msg{color:var(--text);line-height:1.5;}
+    .step-detail{font-size:10px;color:var(--dim);margin-top:2px;}
+    .step-sources{display:flex;flex-direction:column;gap:2px;margin-top:4px;}
+    .step-source{display:flex;justify-content:space-between;font-size:10px;color:var(--dim);}
+    .step-source .sf{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px;}
+    .step-source .ss{color:var(--accent);flex-shrink:0;}
+    @keyframes spin-step{to{transform:rotate(360deg);}}
+
+    /* Folder browser */
+    .browser-bar{
+      display:flex;align-items:center;gap:8px;
+      background:var(--bg);border:1px solid var(--border);border-radius:2px 2px 0 0;
+      padding:8px 10px;border-bottom:none;
+    }
+    .browser-list{
+      background:var(--bg);border:1px solid var(--border);border-radius:0 0 2px 2px;
+      max-height:180px;overflow-y:auto;
+    }
+    .browser-list::-webkit-scrollbar{width:3px;}
+    .browser-list::-webkit-scrollbar-thumb{background:var(--muted);border-radius:2px;}
+    .browser-item{
+      display:flex;align-items:center;gap:8px;
+      padding:7px 10px;font-size:12px;cursor:pointer;
+      border-bottom:1px solid rgba(30,30,46,.5);transition:background .15s;
+      user-select:none;
+    }
+    .browser-item:last-child{border-bottom:none;}
+    .browser-item:hover{background:rgba(255,255,255,.04);}
+    .browser-item.selected{background:rgba(0,255,157,.07);color:var(--accent);}
+    .browser-item.parent{color:var(--dim);}
+    .browser-icon{font-size:13px;flex-shrink:0;}
+    .browser-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+    .browser-badge{font-size:9px;color:var(--accent);background:rgba(0,255,157,.1);
+      border:1px solid rgba(0,255,157,.2);border-radius:2px;padding:1px 5px;flex-shrink:0;}
+
     @keyframes fadeUp{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:translateY(0);}}
     @keyframes blink{0%,100%{opacity:1;}50%{opacity:.3;}}
     @keyframes bounce{0%,80%,100%{transform:translateY(0);}40%{transform:translateY(-4px);}}
+
+    .log-panel{font-size:10px;font-family:var(--mono);line-height:1.8;overflow-y:auto;max-height:200px;padding:8px 4px 0;}
+    .log-panel::-webkit-scrollbar{width:3px;}
+    .log-panel::-webkit-scrollbar-thumb{background:var(--muted);border-radius:2px;}
+    .log-entry{padding:1px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+    .log-entry.ok{color:var(--accent);}
+    .log-entry.err{color:var(--error);}
+    .log-entry.info{color:var(--accent3);}
+    .log-entry.dim{color:var(--dim);}
   </style>
 </head>
 <body>
@@ -288,6 +347,7 @@
     </select>
     <span class="tlabel">Model</span>
     <select class="sel" id="sel-model"><option value="">loading...</option></select>
+    <span id="ollama-status" style="font-size:10px;padding:4px 8px;border-radius:2px;display:none"></span>
     <span class="tlabel">top_k</span>
     <select class="sel" id="sel-topk">
       <option value="3">3</option><option value="5" selected>5</option>
@@ -347,6 +407,16 @@
     <div class="sec-title">RAG Sources <span id="rag-cnt" style="color:var(--accent);margin-left:4px;"></span></div>
     <div id="rag-sources"><div style="font-size:11px;color:var(--muted);">No task sent yet</div></div>
   </div>
+  <div class="sec">
+    <div class="sec-title" style="display:flex;justify-content:space-between;align-items:center">
+      <span>Live Logs</span>
+      <span onclick="clearLogs()" style="font-size:9px;color:var(--muted);cursor:pointer;letter-spacing:.05em">clear</span>
+    </div>
+    <div class="log-panel" id="log-panel">
+      <div class="log-entry dim">Waiting for activity...</div>
+    </div>
+  </div>
+
   <div class="sec" style="flex:1">
     <div class="sec-title">Session History</div>
     <div id="history"><div style="font-size:11px;color:var(--muted);">No tasks yet</div></div>
@@ -361,12 +431,20 @@
       <label>Project Name</label>
       <input type="text" id="new-name" placeholder="my-app" autocomplete="off">
     </div>
+
+    <!-- Folder browser -->
     <div class="field">
-      <label>Path on filesystem</label>
-      <input type="text" id="new-path" placeholder="/Users/kingsley/projects/my-app"
-             oninput="validatePathDebounced()" autocomplete="off">
-      <div class="path-hint" id="path-hint"></div>
+      <label>Folder</label>
+      <div class="browser-bar" id="browser-bar">
+        <span id="browser-current" style="font-size:11px;color:var(--dim);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">Loading...</span>
+        <span id="browser-code-hint" style="font-size:10px;flex-shrink:0;"></span>
+        <button onclick="selectCurrent()" style="background:var(--accent);border:none;border-radius:2px;color:var(--bg);font-family:var(--mono);font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;padding:3px 8px;cursor:pointer;flex-shrink:0;">Use this</button>
+      </div>
+      <div class="browser-list" id="browser-list">
+        <div style="padding:12px;font-size:11px;color:var(--muted)">Loading...</div>
+      </div>
     </div>
+
     <div class="field">
       <label>Description (optional)</label>
       <input type="text" id="new-desc" placeholder="Brief description">
@@ -385,14 +463,50 @@
     history: [],
     tokens: {prompt:0,completion:0,total:0},
     busy: false,
+    indexing: false,
     selectedProject: null,
     pathValid: false,
     pathDebounce: null,
   };
 
+  window.addEventListener('beforeunload', e => {
+    if (S.indexing) {
+      e.preventDefault();
+      e.returnValue = 'Indexing is in progress. Are you sure you want to leave?';
+    }
+  });
+
   // ── Init ──────────────────────────────────────────
   async function init() {
     await Promise.all([loadProjects(), loadModels(), loadProviders()]);
+    checkServices();
+    setInterval(checkServices, 15000); // re-check mỗi 15s
+  }
+
+  async function checkServices() {
+    try {
+      const d = await api('GET', '/services/health');
+      const el = document.getElementById('ollama-status');
+      el.style.display = 'inline-block';
+      if (d.ready) {
+        el.textContent = '● Ollama ready';
+        el.style.background = 'rgba(0,255,157,.1)';
+        el.style.color = 'var(--accent)';
+        el.style.border = '1px solid rgba(0,255,157,.2)';
+      } else if (d.ollama.ok && !d.ollama.embed_ready) {
+        el.textContent = '⚠ Pull embed model';
+        el.style.background = 'rgba(255,170,0,.1)';
+        el.style.color = 'var(--warn)';
+        el.style.border = '1px solid rgba(255,170,0,.2)';
+        addLog('Ollama running but embed model not pulled. Run: docker exec ollama ollama pull nomic-embed-text', 'err');
+      } else {
+        el.textContent = '✗ Ollama offline';
+        el.style.background = 'rgba(255,69,102,.1)';
+        el.style.color = 'var(--error)';
+        el.style.border = '1px solid rgba(255,69,102,.2)';
+        addLog('Ollama is not running. Start with: docker compose up -d ollama', 'err');
+      }
+    } catch {}
   }
 
   async function loadProviders() {
@@ -422,6 +536,8 @@
       const def = d.default || '';
       document.getElementById('sel-model').innerHTML =
               S.models.map(m=>`<option value="${m}"${m===def?' selected':''}>${m}</option>`).join('');
+      // Show hint if default is from bootstrap
+      if (def) addLog(`Default model: ${def}`, 'dim');
     } catch {}
   }
 
@@ -434,9 +550,14 @@
     }
     el.innerHTML = S.projects.map(p => `
     <div class="project-item${S.selectedProject===p.name?' active':''}" onclick="selectProject('${p.name}')">
-      <div class="project-name">
-        <span class="${p.indexed?'indexed':'not-indexed'}"></span>
-        ${esc(p.name)}
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:4px">
+        <div class="project-name" style="flex:1;min-width:0">
+          <span class="${p.indexed?'indexed':'not-indexed'}"></span>
+          ${esc(p.name)}
+        </div>
+        <button onclick="event.stopPropagation();deleteProject('${p.name}')"
+          style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:12px;padding:0 2px;line-height:1;flex-shrink:0"
+          title="Delete project">✕</button>
       </div>
       <div class="project-path" title="${esc(p.path)}">${esc(p.path)}</div>
       <div class="project-meta">${p.indexed?`✓ ${p.file_count} files indexed`:'Not indexed'}</div>
@@ -462,71 +583,104 @@
     if (v) { S.selectedProject = v; renderProjectList(); }
   }
 
-  // ── Add project modal ─────────────────────────────
-  function openAddProject() {
-    document.getElementById('new-name').value = '';
-    document.getElementById('new-path').value = '';
-    document.getElementById('new-desc').value = '';
-    document.getElementById('path-hint').textContent = '';
-    document.getElementById('path-hint').className = 'path-hint';
-    document.getElementById('btn-add').disabled = true;
-    S.pathValid = false;
-    document.getElementById('modal').classList.add('open');
-    document.getElementById('new-name').focus();
-  }
-  function closeModal() { document.getElementById('modal').classList.remove('open'); }
+  // ── Folder browser ────────────────────────────────
+  const B = { currentPath: '', selectedPath: '', selectedName: '' };
 
-  function validatePathDebounced() {
-    clearTimeout(S.pathDebounce);
-    S.pathDebounce = setTimeout(validatePath, 400);
-  }
+  async function browseTo(path) {
+    const list = document.getElementById('browser-list');
+    const bar  = document.getElementById('browser-current');
+    const hint = document.getElementById('browser-code-hint');
+    list.innerHTML = '<div style="padding:12px;font-size:11px;color:var(--muted)">Loading...</div>';
 
-  async function validatePath() {
-    const raw = document.getElementById('new-path').value.trim();
-    const hint = document.getElementById('path-hint');
-    const inp  = document.getElementById('new-path');
-    if (!raw) { hint.textContent=''; S.pathValid=false; updateAddBtn(); return; }
-
-    hint.textContent = 'Checking...'; hint.className = 'path-hint';
     try {
-      const d = await api('POST', '/api/projects/validate-path', {path: raw});
-      if (d.valid) {
-        hint.textContent = `✓ ${d.resolved} — ${d.file_count} code files found`;
-        hint.className = 'path-hint ok';
-        inp.classList.add('valid'); inp.classList.remove('invalid');
-        S.pathValid = true;
-      } else {
-        hint.textContent = `✗ Path not found or not a directory`;
-        hint.className = 'path-hint err';
-        inp.classList.add('invalid'); inp.classList.remove('valid');
-        S.pathValid = false;
+      const d = await api('GET', `/api/projects/browse?path=${encodeURIComponent(path)}`);
+      B.currentPath = d.current;
+      bar.textContent = d.current;
+      bar.title = d.current;
+
+      let html = '';
+
+      // Parent (..)
+      if (d.parent) {
+        html += `<div class="browser-item parent" onclick="browseTo('${esc(d.parent)}')">
+        <span class="browser-icon">↑</span>
+        <span class="browser-name">..</span>
+      </div>`;
       }
-    } catch {
-      hint.textContent = 'Could not validate path'; hint.className = 'path-hint err';
-      S.pathValid = false;
+
+      // Folders
+      if (d.children.length === 0) {
+        html += '<div style="padding:10px 12px;font-size:11px;color:var(--muted)">No subfolders</div>';
+      } else {
+        html += d.children.map(c => `
+        <div class="browser-item${B.selectedPath === c.path ? ' selected' : ''}"
+             onclick="browseTo('${esc(c.path)}')">
+          <span class="browser-icon">📁</span>
+          <span class="browser-name">${esc(c.name)}</span>
+          ${c.has_code ? '<span class="browser-badge">code</span>' : ''}
+        </div>`).join('');
+      }
+
+      list.innerHTML = html;
+      hint.textContent = '';
+
+    } catch(e) {
+      list.innerHTML = `<div style="padding:10px 12px;font-size:11px;color:var(--error)">${e.message}</div>`;
     }
+  }
+
+  function selectCurrent() {
+    // Chọn folder hiện tại đang browse
+    const parts = B.currentPath.split('/').filter(Boolean);
+    const name  = parts[parts.length - 1] || B.currentPath;
+    B.selectedPath = B.currentPath;
+    B.selectedName = name;
+
+    // Auto-fill project name nếu chưa có
+    const nameInput = document.getElementById('new-name');
+    if (!nameInput.value.trim()) {
+      nameInput.value = name.toLowerCase().replace(/[^a-z0-9-_]/g, '-');
+    }
+
+    document.getElementById('browser-code-hint').textContent = '✓ selected';
+    document.getElementById('browser-code-hint').style.color = 'var(--accent)';
     updateAddBtn();
   }
 
+  // ── Add project modal ─────────────────────────────
+  function openAddProject() {
+    document.getElementById('new-name').value = '';
+    document.getElementById('new-desc').value = '';
+    B.selectedPath = '';
+    B.selectedName = '';
+    document.getElementById('btn-add').disabled = true;
+    document.getElementById('modal').classList.add('open');
+    document.getElementById('new-name').focus();
+    browseTo(''); // Start from home dir
+  }
+
+  function closeModal() {
+    document.getElementById('modal').classList.remove('open');
+  }
+
   function updateAddBtn() {
-    document.getElementById('btn-add').disabled = !S.pathValid || !document.getElementById('new-name').value.trim();
+    document.getElementById('btn-add').disabled =
+            !B.selectedPath || !document.getElementById('new-name').value.trim();
   }
 
   async function addProject() {
     const name = document.getElementById('new-name').value.trim();
-    const path = document.getElementById('new-path').value.trim();
     const desc = document.getElementById('new-desc').value.trim();
-    if (!name || !path) return;
+    if (!name || !B.selectedPath) return;
 
     try {
-      await api('POST', '/api/projects', {name, path, description: desc});
+      await api('POST', '/api/projects', {name, path: B.selectedPath, description: desc});
       closeModal();
       await loadProjects();
       selectProject(name);
       gwMsg(`Project <strong>${name}</strong> added. Run <code>/index ${name}</code> to index it.`);
     } catch(e) {
-      document.getElementById('path-hint').textContent = e.message;
-      document.getElementById('path-hint').className = 'path-hint err';
+      gwMsg(`❌ ${e.message}`, 'error');
     }
   }
 
@@ -551,17 +705,189 @@
   async function sendTask(task, project, model) {
     setBusy(true);
     const topK = parseInt(document.getElementById('sel-topk').value);
-    const tid  = showTyping();
+    const msgs = document.getElementById('messages');
+    clearEmpty(msgs);
+    addLog('Task → ' + project + ' [' + model + ']: ' + task.slice(0,60), 'info');
+
+    // Thinking bubble
+    const bid = 'task-' + Date.now();
+    const STEPS = {
+      project:    {label:'Project',        icon:'📁'},
+      model:      {label:'Model',          icon:'◈'},
+      embedding:  {label:'Ollama embed',   icon:'⬡'},
+      rag:        {label:'RAG sources',    icon:'🔍'},
+      analysis:   {label:'Code analysis',  icon:'🧠'},
+      model_call: {label:'Model call',     icon:'⚡'},
+      validate:   {label:'Validate diff',  icon:'✔'},
+    };
+    const stepOrder = Object.keys(STEPS);
+
+    msgs.insertAdjacentHTML('beforeend', `
+    <div class="msg-row" id="${bid}">
+      <div class="avatar gw">GW</div>
+      <div class="bubble" style="min-width:300px">
+        <div style="font-size:12px;margin-bottom:8px;color:var(--dim)">
+          Processing task...
+        </div>
+        <div class="thinking-block">
+          <div class="thinking-toggle open" onclick="this.classList.toggle('open')">
+            <span class="arrow">▶</span>
+            <span id="${bid}-summary">Starting...</span>
+          </div>
+          <div class="thinking-steps" id="${bid}-steps"></div>
+        </div>
+      </div>
+    </div>`);
+    scrollBot(msgs);
+
+    const stepEls = {};
+
+    function upsertStep(step, status, msg, extra) {
+      const stepsEl = document.getElementById(bid + '-steps');
+      if (!stepsEl) return;
+
+      if (!stepEls[step]) {
+        const info = STEPS[step] || {label: step, icon: '·'};
+        const el = document.createElement('div');
+        el.className = 'step-row';
+        el.id = bid + '-step-' + step;
+        el.innerHTML = `
+        <div class="step-icon ${status}" id="${bid}-si-${step}">${info.icon}</div>
+        <div class="step-body">
+          <div class="step-msg" id="${bid}-sm-${step}">${esc(msg)}</div>
+          <div class="step-detail" id="${bid}-sd-${step}"></div>
+        </div>`;
+        stepsEl.appendChild(el);
+        stepEls[step] = el;
+      } else {
+        const iconEl = document.getElementById(bid + '-si-' + step);
+        const msgEl  = document.getElementById(bid + '-sm-' + step);
+        if (iconEl) iconEl.className = 'step-icon ' + status;
+        if (msgEl)  msgEl.textContent = msg;
+      }
+
+      // Extra detail
+      const detEl = document.getElementById(bid + '-sd-' + step);
+      if (detEl && extra) {
+        if (extra.sources) {
+          detEl.innerHTML = '<div class="step-sources">' +
+                  extra.sources.map(s =>
+                          '<div class="step-source"><span class="sf" title="' + esc(s.file) + '">' + esc(s.file) + '</span>' +
+                          '<span class="ss">' + Math.round(s.score * 100) + '%</span></div>'
+                  ).join('') + '</div>';
+        } else if (extra.tokens) {
+          detEl.textContent = 'prompt: ' + (extra.tokens.prompt||0) + ' · completion: ' + (extra.tokens.completion||0) + ' · total: ' + (extra.tokens.total||0);
+        } else if (extra.recommendation) {
+          const recLabel = {use_existing:'Reuse existing', extend_existing:'Extend existing', implement_new:'New implementation'};
+          detEl.textContent = (recLabel[extra.recommendation] || extra.recommendation) +
+                  (extra.existing_functions?.length ? ' — ' + extra.existing_functions.join(', ') : '');
+        }
+      }
+
+      // Update summary line
+      const sumEl = document.getElementById(bid + '-summary');
+      if (sumEl) {
+        const running = stepOrder.find(s => stepEls[s] &&
+                document.getElementById(bid + '-si-' + s)?.classList.contains('running'));
+        if (running) {
+          const info = STEPS[running] || {label: running};
+          sumEl.textContent = info.label + '...';
+        } else {
+          sumEl.textContent = 'Done';
+        }
+      }
+
+      scrollBot(msgs);
+    }
+
     try {
-      const d = await api('POST', '/task', {task, project, model, top_k: topK});
-      rmTyping(tid);
-      if (d.metrics) updateStats(d.metrics);
-      renderDiff(d);
-      addHistory({task, project, model, metrics: d.metrics, ts: new Date()});
+      await new Promise((resolve, reject) => {
+        const params = new URLSearchParams({task, project, model, top_k: topK});
+        const es = new EventSource('/task/stream?' + params.toString());
+
+        es.onmessage = e => {
+          const d = JSON.parse(e.data);
+
+          if (d.type === 'step') {
+            upsertStep(d.step, d.status, d.msg, d);
+          }
+
+          if (d.type === 'error') {
+            es.close();
+            // Mark all running steps as error
+            Object.keys(stepEls).forEach(s => {
+              const el = document.getElementById(bid + '-si-' + s);
+              if (el?.classList.contains('running')) el.className = 'step-icon error';
+            });
+            const bubble = document.querySelector('#' + bid + ' .bubble');
+            if (bubble) bubble.insertAdjacentHTML('beforeend',
+                    '<div style="color:var(--error);font-size:11px;margin-top:8px">❌ ' + esc(d.msg) + '</div>');
+            addLog('Error: ' + d.msg, 'err');
+            setBusy(false);
+            reject(new Error(d.msg));
+          }
+
+          if (d.type === 'done') {
+            es.close();
+            // Mark all steps done
+            Object.keys(stepEls).forEach(s => {
+              const el = document.getElementById(bid + '-si-' + s);
+              if (el?.classList.contains('running')) el.className = 'step-icon done';
+            });
+            // Collapse thinking block
+            const toggle = document.querySelector('#' + bid + ' .thinking-toggle');
+            if (toggle) toggle.classList.remove('open');
+            const sumEl = document.getElementById(bid + '-summary');
+            if (sumEl) sumEl.textContent = stepOrder.length + ' steps completed';
+
+            if (d.metrics) {
+              updateStats(d.metrics);
+              addLog('Done: ' + (d.metrics.tokens?.total||0) + ' tokens, ' +
+                      d.metrics.timings?.rag_ms + 'ms embed, ' +
+                      d.metrics.timings?.model_ms + 'ms model', 'ok');
+            }
+
+            // Append diff below thinking block
+            const diff = d.diff || {};
+            const an   = d.analysis || {};
+            const NL = String.fromCharCode(10);
+            const changes = (diff.changes||[]).map(c =>
+                    '<div class="da">+ Lines ' + c.start_line + '\u2013' + c.end_line + ' replaced</div>' +
+                    '<div class="dc">' + esc(c.new_content).split(NL).slice(0,5).map(function(l){return '  '+l;}).join(NL) +
+                    (c.new_content.split(NL).length > 5 ? NL + '  ...' : '') + '</div>'
+            ).join('');
+            const m = d.metrics || {};
+            const bubble = document.querySelector('#' + bid + ' .bubble');
+            if (bubble) {
+              bubble.insertAdjacentHTML('beforeend', `
+              <div class="diff-block" style="margin-top:8px">
+                <div class="diff-hdr">
+                  <span>${esc(diff.file||'')}</span>
+                  <span>${(diff.changes||[]).length} change(s)</span>
+                </div>
+                <div class="diff-body">${changes}</div>
+              </div>
+              <div class="msg-meta" style="margin-top:6px">
+                ${esc(m.model||'')} · ${m.tokens?.total||0} tokens · ${(m.timings?.total_ms||0)}ms
+              </div>`);
+            }
+
+            addHistory({task, project, model, metrics: d.metrics, ts: new Date()});
+            resolve();
+          }
+        };
+
+        es.onerror = () => {
+          es.close();
+          addLog('SSE connection failed', 'err');
+          reject(new Error('Connection failed'));
+        };
+      });
     } catch(e) {
-      rmTyping(tid);
-      gwMsg(`❌ ${e.message}`, 'error');
-    } finally { setBusy(false); }
+      gwMsg('❌ ' + e.message, 'error');
+    } finally {
+      setBusy(false);
+    }
   }
 
   // ── Slash commands ────────────────────────────────
@@ -593,16 +919,114 @@
 
   async function indexProject(proj) {
     setBusy(true);
-    const tid = showTyping();
+    S.indexing = true;
+    const msgs = document.getElementById('messages');
+    clearEmpty(msgs);
+
+    // Progress bubble
+    const pid = 'prog-' + Date.now();
+    let currentTaskId = null;
+    msgs.insertAdjacentHTML('beforeend', `
+    <div class="msg-row" id="${pid}">
+      <div class="avatar gw">GW</div>
+      <div class="bubble" style="min-width:280px">
+        <div style="font-size:12px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center">
+          <span>Indexing <strong>${proj}</strong>...</span>
+          <button id="${pid}-cancel"
+            style="background:transparent;border:1px solid var(--error);border-radius:2px;color:var(--error);font-family:var(--mono);font-size:9px;letter-spacing:.1em;text-transform:uppercase;padding:2px 8px;cursor:pointer"
+            onclick="cancelIndex('${pid}')">Cancel</button>
+        </div>
+        <div style="background:var(--border);border-radius:1px;height:3px;margin-bottom:8px">
+          <div id="${pid}-bar" style="height:3px;border-radius:1px;background:var(--accent);width:0;transition:width .3s ease"></div>
+        </div>
+        <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--dim);margin-bottom:6px">
+          <span id="${pid}-pct">0%</span>
+          <span id="${pid}-eta">calculating...</span>
+        </div>
+        <div id="${pid}-file" style="font-size:10px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:320px"></div>
+      </div>
+    </div>`);
+    scrollBot(msgs);
+
     try {
-      const d = await api('POST', `/index/full?project=${encodeURIComponent(proj)}`);
-      rmTyping(tid);
-      gwMsg(`✓ Indexed <strong>${proj}</strong> — ${d.indexed} files${d.errors?.length?`, ${d.errors.length} errors`:''}`);
-      await loadProjects();
+      await new Promise((resolve, reject) => {
+        const url = `/index/stream?project=${encodeURIComponent(proj)}`;
+        console.log('[SSE] Connecting to:', url);
+        addLog(`Connecting: ${url}`, 'info');
+        const es  = new EventSource(url);
+        console.log('[SSE] EventSource created, readyState:', es.readyState);
+
+        es.onmessage = e => {
+          const d = JSON.parse(e.data);
+
+          if (d.type === 'scanning') {
+            const found = d.found || 0;
+            document.getElementById(`${pid}-file`).textContent = found ? `Scanning... ${found} files found` : 'Scanning project files...';
+            document.getElementById(`${pid}-pct`).textContent = '...';
+            document.getElementById(`${pid}-eta`).textContent = 'scanning';
+            // Store task_id for cancel
+            if (d.task_id && !document.getElementById(`${pid}-taskid`)) {
+              const inp = document.createElement('input');
+              inp.type = 'hidden'; inp.id = `${pid}-taskid`; inp.value = d.task_id;
+              document.getElementById(pid).appendChild(inp);
+            }
+          }
+
+          if (d.type === 'start') {
+            document.getElementById(`${pid}-file`).textContent =
+                    `0 / ${d.total} files`;
+          }
+
+          if (d.type === 'file') {
+            document.getElementById(`${pid}-bar`).style.width  = d.pct + '%';
+            document.getElementById(`${pid}-pct`).textContent  = d.pct + '%';
+            document.getElementById(`${pid}-eta`).textContent  =
+                    d.remaining_s > 0 ? `~${d.remaining_s}s left` : 'almost done';
+            document.getElementById(`${pid}-file`).textContent =
+                    `${d.done} / ${d.total} — ${d.file}`;
+
+            // Update stats panel token-style
+            document.getElementById('s-prompt').textContent = d.done;
+            document.getElementById('s-total').textContent  = d.total;
+          }
+
+          if (d.type === 'cancelled') {
+            es.close();
+            const bubble = document.querySelector(`#${pid} .bubble`);
+            bubble.innerHTML = '<span style="color:var(--warn)">⊘ Cancelled — ' + (d.done||d.scanned||0) + ' files processed</span>';
+            addLog('Cancelled: ' + (d.done||0) + ' files processed', 'dim');
+            S.indexing = false;
+            loadProjects();
+            resolve();
+          }
+
+          if (d.type === 'done') {
+            es.close();
+            // Replace progress bubble with summary
+            const bubble = document.querySelector(`#${pid} .bubble`);
+            bubble.innerHTML = `
+            ✓ Indexed <strong>${proj}</strong><br>
+            <span style="font-size:11px;color:var(--dim)">
+              ${d.indexed} files · ${d.errors} errors · ${(d.total_ms/1000).toFixed(1)}s
+            </span>`;
+            loadProjects();
+            resolve();
+          }
+        };
+
+        es.onerror = () => {
+          es.close();
+          const bubble = document.querySelector(`#${pid} .bubble`);
+          if (bubble) bubble.innerHTML = '❌ Indexing failed — check gateway logs';
+          reject(new Error('SSE connection failed'));
+        };
+      });
     } catch(e) {
-      rmTyping(tid);
       gwMsg(`❌ ${e.message}`, 'error');
-    } finally { setBusy(false); }
+    } finally {
+      S.indexing = false;
+      setBusy(false);
+    }
   }
 
   // ── Stats ─────────────────────────────────────────
@@ -683,16 +1107,33 @@
   function renderDiff(data) {
     const msgs = document.getElementById('messages');
     const diff = data.diff || {};
+    const an   = data.analysis || {};
     const changes = (diff.changes||[]).map(c=>`
     <div class="da">+ Lines ${c.start_line}–${c.end_line} replaced</div>
     <div class="dc">${esc(c.new_content).split('\n').slice(0,5).map(l=>'  '+l).join('\n')}${c.new_content.split('\n').length>5?'\n  ...':''}</div>
   `).join('');
     const m = data.metrics||{};
+
+    // Analysis badge
+    const recMap = {
+      use_existing:    {label:'Reused existing', color:'var(--accent3)'},
+      extend_existing: {label:'Extended existing', color:'var(--warn)'},
+      implement_new:   {label:'New implementation', color:'var(--accent)'},
+    };
+    const rec = recMap[an.recommendation] || {label:'', color:'var(--dim)'};
+    const analysisBadge = an.recommendation ? `
+    <div style="margin-bottom:8px;font-size:10px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+      <span style="color:${rec.color};border:1px solid ${rec.color};border-radius:2px;padding:1px 7px;opacity:.8">${rec.label}</span>
+      ${an.existing_functions?.length ? `<span style="color:var(--dim)">${an.existing_functions.join(', ')}</span>` : ''}
+      ${an.summary ? `<span style="color:var(--dim)">· ${esc(an.summary)}</span>` : ''}
+    </div>` : '';
+
     msgs.insertAdjacentHTML('beforeend',`
     <div class="msg-row">
       <div class="avatar gw">GW</div>
       <div class="bubble">
         ✓ Diff for <strong>${diff.file||'—'}</strong>
+        ${analysisBadge}
         <div class="diff-block">
           <div class="diff-hdr"><span>${diff.file||''}</span><span>${(diff.changes||[]).length} change(s)</span></div>
           <div class="diff-body">${changes}</div>
@@ -739,6 +1180,63 @@
   }
   function handleKey(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}}
   function autoResize(el){el.style.height='auto';el.style.height=Math.min(el.scrollHeight,110)+'px';}
+  async function deleteProject(name) {
+    if (!confirm(`Delete project "${name}"?\nThis removes it from the registry and clears its index.`)) return;
+    try {
+      await api('DELETE', `/api/projects/${encodeURIComponent(name)}`);
+      if (S.selectedProject === name) {
+        S.selectedProject = null;
+        document.getElementById('sel-project').value = '';
+      }
+      await loadProjects();
+      gwMsg(`Project <strong>${name}</strong> removed.`);
+    } catch(e) {
+      gwMsg(`❌ ${e.message}`, 'error');
+    }
+  }
+
+  // ── Cancel index ──────────────────────────────────
+  async function cancelIndex(pid) {
+    const btn = document.getElementById(`${pid}-cancel`);
+    if (btn) { btn.disabled = true; btn.textContent = 'Cancelling...'; }
+    // task_id is captured in closure via currentTaskId — pass via data attr
+    const taskIdEl = document.getElementById(`${pid}-taskid`);
+    const taskId = taskIdEl ? taskIdEl.value : null;
+    if (taskId) {
+      await fetch('/index/cancel', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({task_id: taskId}),
+      });
+    }
+    addLog('Cancel requested...', 'dim');
+  }
+
+  // ── Logs ──────────────────────────────────────────
+  const MAX_LOGS = 200;
+
+  function addLog(msg, type='dim') {
+    const panel = document.getElementById('log-panel');
+    // Remove placeholder
+    const placeholder = panel.querySelector('.log-entry.dim');
+    if (placeholder && placeholder.textContent === 'Waiting for activity...') {
+      placeholder.remove();
+    }
+    const el = document.createElement('div');
+    el.className = 'log-entry ' + type;
+    el.textContent = '[' + new Date().toLocaleTimeString() + '] ' + msg;
+    el.title = el.textContent;
+    panel.appendChild(el);
+    // Trim old logs
+    while (panel.children.length > MAX_LOGS) panel.removeChild(panel.firstChild);
+    panel.scrollTop = panel.scrollHeight;
+  }
+
+  function clearLogs() {
+    document.getElementById('log-panel').innerHTML =
+            '<div class="log-entry dim">Waiting for activity...</div>';
+  }
+
   function confirmReset(){
     if(confirm('Reset all configuration?'))
       fetch('/api/bootstrap/reset',{method:'POST'}).then(()=>location.reload());
@@ -746,9 +1244,6 @@
 
   // Enter in modal name field moves to path
   document.addEventListener('DOMContentLoaded',()=>{
-    document.getElementById('new-name').addEventListener('keydown',e=>{
-      if(e.key==='Enter'){document.getElementById('new-path').focus();}
-    });
     document.getElementById('new-name').addEventListener('input',()=>updateAddBtn());
     document.getElementById('modal').addEventListener('click',e=>{
       if(e.target===document.getElementById('modal')) closeModal();
