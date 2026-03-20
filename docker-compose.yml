@@ -1,5 +1,3 @@
-version: "3.9"
-
 # ─────────────────────────────────────────────────────────────────
 # Full stack — tất cả chạy trong Docker.
 # Projects: copy folder project vào ./projects/<tên>/
@@ -55,6 +53,8 @@ services:
     ports:
       - "8080:8080"
     volumes:
+      # App source bind mount để uvicorn --reload hot-reload khi sửa file local
+      - ./gateway:/app
       # Projects — mỗi folder 1 volume, tên tùy ý
       # Thêm project mới: thêm 1 dòng, đổi tên sau dấu :
       # Format: /path/on/host:/projects/<tên>:ro
@@ -62,7 +62,7 @@ services:
       # Ví dụ thêm project từ path khác:
       # - /Users/kingsley/work/backend:/projects/backend:ro
       # - /Users/kingsley/Desktop/lisroe:/projects/lisroe:ro
-      # Config riêng (rw) — .env + gateway.db
+      # Config riêng (rw) — gateway.db
       - gateway_config:/config
     environment:
       - CHROMA_HOST=chromadb

@@ -270,6 +270,29 @@
       <div class="msg" id="msg-openai"></div>
     </div>
 
+    <!-- OpenAI Codex OAuth -->
+    <div class="card" style="animation-delay:0.09s">
+      <div class="card-header">
+        <div class="card-title">
+          <div class="provider-icon">◎</div>
+          OpenAI Codex OAuth
+        </div>
+        <span class="badge badge-oauth" id="badge-openai-codex">ChatGPT OAuth</span>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
+        <button class="btn btn-ghost" onclick="startOpenAICodexFlow()" id="btn-openai-codex-start">Connect with ChatGPT</button>
+        <button class="btn btn-ghost" onclick="toggleCodexManual()">Paste callback URL</button>
+      </div>
+      <div class="msg info" id="msg-openai-codex" style="display:block;">Uses ChatGPT/Codex OAuth. Good for <code style="color:var(--accent)">openai-codex/*</code> models, separate from API-key <code style="color:var(--accent)">openai/*</code>.</div>
+      <div class="input-group" id="codex-manual-box" style="display:none;margin-top:12px;">
+        <label>Callback URL</label>
+        <input type="text" id="openai-codex-callback" placeholder="http://127.0.0.1:1455/auth/callback?code=...&state=..." autocomplete="off"
+               onkeydown="if(event.key==='Enter') exchangeOpenAICodexCallback()">
+        <div class="key-hint"><span>If auto-return does not work, paste the full redirect URL here.</span></div>
+        <div style="margin-top:10px;"><button class="btn btn-ghost" onclick="exchangeOpenAICodexCallback()">Finish OAuth</button></div>
+      </div>
+    </div>
+
     <!-- Gemini -->
     <div class="card" style="animation-delay:0.1s">
       <div class="card-header">
@@ -377,6 +400,7 @@
 <script>
   const state = {
     openai:       { key: null, verified: false, models: [], selectedModel: null },
+    openaiCodex:  { verified: false, accessToken: null, refreshToken: null, expiresAt: null, accountId: null, models: ['openai-codex/gpt-5.4', 'openai-codex/gpt-5.3-codex', 'openai-codex/gpt-5.3-codex-spark'], selectedModel: 'openai-codex/gpt-5.4' },
     gemini:       { key: null, verified: false, models: [] },
     copilot:      { token: null, verified: false },
     defaultModel: null,
@@ -416,7 +440,7 @@
     if (!key) { showMsg(msg, 'error', 'Enter an API key first'); return; }
 
     btn.disabled = true; btn.textContent = 'Verifying...';
-    showMsg(msg, 'info', 'Connecting to OpenAI...');
+    showMsg(msg, 'info', 'Connecting to OpenAI and testing a runtime model...');
 
     try {
       const data = await api('POST', '/openai/verify', { api_key: key });
@@ -424,8 +448,8 @@
       state.openai.key      = key;
       state.openai.verified = true;
       state.openai.models   = data.models || [];
-      // default: first model
-      if (state.openai.models.length > 0) state.openai.selectedModel = state.openai.models[0];
+      state.openai.selectedModel = data.runtime_model || state.openai.models[0] || null;
+      if (!state.defaultModel) state.defaultModel = state.openai.selectedModel;
 
       inp.classList.remove('has-error'); inp.classList.add('has-success');
       document.getElementById('badge-openai').textContent = 'Verified ✓';
@@ -435,6 +459,7 @@
       renderOpenAIModels(data.models);
       checkProviders();
     } catch(e) {
+      state.openai = { key: null, verified: false, models: [], selectedModel: null };
       inp.classList.add('has-error');
       showMsg(msg, 'error', e.message);
     } finally {
@@ -458,6 +483,49 @@
       list.appendChild(div);
     });
     list.classList.add('active');
+  }
+
+  // ── OpenAI Codex OAuth ───────────────────────
+  function toggleCodexManual() {
+    const box = document.getElementById('codex-manual-box');
+    box.style.display = box.style.display === 'none' ? 'block' : 'none';
+  }
+
+  async function startOpenAICodexFlow() {
+    const btn = document.getElementById('btn-openai-codex-start');
+    const msg = document.getElementById('msg-openai-codex');
+    btn.disabled = true; btn.textContent = 'Starting...';
+    try {
+      const data = await api('POST', '/openai-codex/start');
+      showMsg(msg, 'info', 'Browser login opened. After approval, you should return automatically. If not, paste the callback URL below.');
+      document.getElementById('codex-manual-box').style.display = 'block';
+      window.open(data.authorize_url, '_blank');
+    } catch (e) {
+      showMsg(msg, 'error', e.message);
+    } finally {
+      btn.disabled = false; btn.textContent = 'Connect with ChatGPT';
+    }
+  }
+
+  async function exchangeOpenAICodexCallback() {
+    const input = document.getElementById('openai-codex-callback');
+    const msg = document.getElementById('msg-openai-codex');
+    const callbackUrl = input.value.trim();
+    if (!callbackUrl) { showMsg(msg, 'error', 'Paste the full callback URL first'); return; }
+    showMsg(msg, 'info', 'Exchanging OAuth callback with OpenAI...');
+    try {
+      const data = await api('POST', '/openai-codex/exchange', { callback_url: callbackUrl });
+      state.openaiCodex.verified = true;
+      state.openaiCodex.accountId = data.account_id || null;
+      state.openaiCodex.expiresAt = data.expires_at || null;
+      if (!state.defaultModel) state.defaultModel = state.openaiCodex.selectedModel;
+      document.getElementById('badge-openai-codex').textContent = 'Connected ✓';
+      document.getElementById('badge-openai-codex').className = 'badge badge-verified';
+      showMsg(msg, 'success', data.message + (data.account_id ? ` Account: ${data.account_id}` : ''));
+      checkProviders();
+    } catch (e) {
+      showMsg(msg, 'error', e.message);
+    }
   }
 
   // ── Gemini ────────────────────────────────────
@@ -489,11 +557,15 @@
     const box = document.getElementById('device-box');
     btn.disabled = true; btn.textContent = 'Starting...';
     try {
+      const status = await api('GET', '/copilot/status');
+      if (!status.available) throw new Error(status.detail || 'Copilot backend unavailable');
+
       const data = await api('POST', '/copilot/start');
       state.deviceCode = data.device_code;
       document.getElementById('device-code').textContent = data.user_code;
       box.classList.add('active');
       btn.style.display = 'none';
+      showMsg(document.getElementById('msg-copilot'), 'info', 'Backend detected at ' + status.url + '. Waiting for GitHub authorization...');
       window.open(data.verification_uri, '_blank');
       const interval = (data.interval || 5) * 1000;
       state.pollInterval = setInterval(() => pollCopilot(data.device_code), interval);
@@ -514,7 +586,7 @@
         document.getElementById('poll-text').style.color = 'var(--accent)';
         document.getElementById('badge-copilot').textContent = 'Connected ✓';
         document.getElementById('badge-copilot').className = 'badge badge-verified';
-        showMsg(document.getElementById('msg-copilot'), 'success', 'GitHub Copilot connected');
+        showMsg(document.getElementById('msg-copilot'), 'success', 'GitHub Copilot token acquired and backend is reachable');
         checkProviders();
       } else if (data.status === 'slow_down') {
         clearInterval(state.pollInterval);
@@ -536,7 +608,7 @@
 
   // ── Provider check ────────────────────────────
   function checkProviders() {
-    const any = state.openai.verified || state.gemini.verified || state.copilot.verified;
+    const any = state.openai.verified || state.openaiCodex.verified || state.gemini.verified || state.copilot.verified;
     document.getElementById('btn-next-1').disabled = !any;
     if (any) {
       document.getElementById('provider-hint').textContent = 'Ready to continue';
@@ -544,6 +616,8 @@
       if (!state.defaultModel) {
         if (state.openai.verified && state.openai.selectedModel)
           state.defaultModel = state.openai.selectedModel;
+        else if (state.openaiCodex.verified && state.openaiCodex.selectedModel)
+          state.defaultModel = state.openaiCodex.selectedModel;
         else if (state.gemini.verified && state.gemini.models.length)
           state.defaultModel = state.gemini.models[0];
       }
@@ -574,6 +648,16 @@
       </div>`;
     }
 
+    // OpenAI Codex OAuth
+    if (state.openaiCodex.verified && state.openaiCodex.models.length) {
+      const options = state.openaiCodex.models.map(m => `
+      <div class="model-option ${state.defaultModel === m ? 'selected' : ''}" onclick="selectDefault('${m}')">
+        <div class="model-name">${m}</div>
+        <div class="model-provider">OpenAI Codex OAuth</div>
+      </div>`).join('');
+      html += `<div style="margin-bottom:20px;"><label>OpenAI Codex Models</label><div class="model-grid">${options}</div></div>`;
+    }
+
     // Gemini
     if (state.gemini.verified && state.gemini.models.length) {
       const options = state.gemini.models.map(m => `
@@ -600,8 +684,11 @@
   function selectDefault(id) {
     state.defaultModel = id;
     // Deselect OpenAI model if switching away
-    if (!id.startsWith('copilot') && !id.startsWith('gemini')) {
+    if (id.startsWith('openai/')) {
       state.openai.selectedModel = id;
+    }
+    if (id.startsWith('openai-codex/')) {
+      state.openaiCodex.selectedModel = id;
     }
     buildStep2();
   }
@@ -613,6 +700,11 @@
       lines.push(`<span class="ok">✓</span> OpenAI — key configured (${state.openai.models.length} models)`);
     else
       lines.push(`<span class="skip">–</span> OpenAI — skipped`);
+
+    if (state.openaiCodex.verified)
+      lines.push(`<span class="ok">✓</span> OpenAI Codex OAuth — connected${state.openaiCodex.accountId ? ` (${state.openaiCodex.accountId})` : ''}`);
+    else
+      lines.push(`<span class="skip">–</span> OpenAI Codex OAuth — skipped`);
 
     if (state.gemini.verified)
       lines.push(`<span class="ok">✓</span> Google Gemini — key configured (${state.gemini.models.length} models)`);
@@ -636,6 +728,12 @@
 
     const providers = {};
     if (state.openai.verified)  providers.openai  = { api_key: state.openai.key };
+    if (state.openaiCodex.verified) providers.openai_codex = {
+      access_token: 'stored-via-exchange',
+      refresh_token: 'stored-via-exchange',
+      expires_at: state.openaiCodex.expiresAt,
+      account_id: state.openaiCodex.accountId,
+    };
     if (state.gemini.verified)  providers.gemini  = { api_key: state.gemini.key };
     if (state.copilot.verified) providers.copilot = { token: state.copilot.token };
 
@@ -645,12 +743,12 @@
       document.getElementById('complete').classList.add('active');
 
       const logs = [];
-      if (state.openai.verified)  logs.push(`<span class="ok">✓</span> OPENAI_API_KEY written`);
-      if (state.gemini.verified)  logs.push(`<span class="ok">✓</span> GEMINI_API_KEY written`);
-      if (state.copilot.verified) logs.push(`<span class="ok">✓</span> COPILOT_TOKEN written`);
+      if (state.openai.verified)  logs.push(`<span class="ok">✓</span> OPENAI_API_KEY stored in SQLite config`);
+      if (state.openaiCodex.verified) logs.push(`<span class="ok">✓</span> OPENAI_CODEX OAuth refresh token stored in SQLite config`);
+      if (state.gemini.verified)  logs.push(`<span class="ok">✓</span> GEMINI_API_KEY stored in SQLite config`);
+      if (state.copilot.verified) logs.push(`<span class="ok">✓</span> COPILOT_TOKEN stored in SQLite config`);
       logs.push(`<span class="ok">✓</span> DEFAULT_MODEL=${state.defaultModel}`);
-      logs.push(`<span class="ok">✓</span> .env written to /config/.env`);
-      logs.push(`<span class="ok">✓</span> Gateway restarting...`);
+      logs.push(`<span class="ok">✓</span> Gateway config updated`);
       document.getElementById('complete-log').innerHTML = logs.join('<br>');
 
       setTimeout(checkGatewayReady, 3000);

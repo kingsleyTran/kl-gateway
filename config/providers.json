@@ -1,6 +1,6 @@
 {
   "openai": {
-    "api_key": "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"
+    "api_key": ""
   },
-  "default_model": "gpt-5.3-codex"
+  "default_model": "gpt-4.1-mini"
 }
