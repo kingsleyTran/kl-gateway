@@ -1,0 +1,570 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenClaw Gateway — Index Dashboard</title>
+    <style>
+        :root {
+            --bg:      #0a0a0f;
+            --surface: #12121a;
+            --surface2:#1a1a26;
+            --border:  #1e1e2e;
+            --text:    #cdd6f4;
+            --dim:     #6c7086;
+            --muted:   #45475a;
+            --accent:  #00ff9d;
+            --accent2: #89b4fa;
+            --accent3: #cba6f7;
+            --warn:    #fab387;
+            --error:   #ff4566;
+            --mono:    'JetBrains Mono', 'Fira Code', monospace;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { background: var(--bg); color: var(--text); font-family: var(--mono); font-size: 13px; }
+
+        .header {
+            background: var(--surface);
+            border-bottom: 1px solid var(--border);
+            padding: 14px 24px;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+        .header-title { font-size: 14px; font-weight: 700; color: var(--accent); }
+        .header a { color: var(--dim); font-size: 11px; text-decoration: none; }
+        .header a:hover { color: var(--text); }
+
+        .main { display: grid; grid-template-columns: 300px 1fr; height: calc(100vh - 49px); }
+
+        /* ── Sidebar ── */
+        .sidebar {
+            background: var(--surface);
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .sidebar-hdr {
+            padding: 14px 16px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .sidebar-hdr h2 { font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--dim); }
+        .jobs-list { flex: 1; overflow-y: auto; }
+        .job-item {
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border);
+            cursor: pointer;
+            transition: background .1s;
+        }
+        .job-item:hover { background: var(--surface2); }
+        .job-item.active { background: var(--surface2); border-left: 2px solid var(--accent); }
+        .job-project { font-size: 12px; font-weight: 600; margin-bottom: 4px; }
+        .job-meta { display: flex; gap: 8px; align-items: center; font-size: 10px; color: var(--dim); }
+        .job-status {
+            font-size: 9px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
+            padding: 2px 6px; border-radius: 2px;
+        }
+        .job-status.queued    { background: rgba(137,180,250,.15); color: var(--accent2); }
+        .job-status.running   { background: rgba(0,255,157,.1);    color: var(--accent);  }
+        .job-status.done      { background: rgba(0,255,157,.05);   color: var(--dim);     }
+        .job-status.failed    { background: rgba(255,69,102,.1);   color: var(--error);   }
+        .job-status.cancelled { background: rgba(250,179,135,.1);  color: var(--warn);    }
+
+        /* ── New job form ── */
+        .new-job {
+            padding: 12px 16px;
+            border-top: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .new-job select, .new-job input {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 2px;
+            color: var(--text);
+            font-family: var(--mono);
+            font-size: 11px;
+            padding: 7px 10px;
+            width: 100%;
+            outline: none;
+        }
+        .new-job select:focus, .new-job input:focus { border-color: var(--accent); }
+        .btn {
+            background: var(--accent);
+            border: none;
+            border-radius: 2px;
+            color: var(--bg);
+            cursor: pointer;
+            font-family: var(--mono);
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: .1em;
+            padding: 8px;
+            text-transform: uppercase;
+            width: 100%;
+        }
+        .btn:hover { opacity: .9; }
+        .btn:disabled { opacity: .4; cursor: not-allowed; }
+        .btn-cancel {
+            background: transparent;
+            border: 1px solid var(--error);
+            color: var(--error);
+        }
+
+        /* ── Detail panel ── */
+        .detail {
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .detail-hdr {
+            padding: 14px 24px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .detail-hdr h2 { font-size: 13px; font-weight: 600; }
+        .detail-hdr .actions { display: flex; gap: 8px; }
+
+        /* Progress bar */
+        .progress-wrap { padding: 16px 24px; border-bottom: 1px solid var(--border); }
+        .progress-info { display: flex; justify-content: space-between; font-size: 11px; color: var(--dim); margin-bottom: 8px; }
+        .progress-bar-bg { background: var(--border); border-radius: 1px; height: 4px; }
+        .progress-bar-fill { height: 4px; border-radius: 1px; background: var(--accent); transition: width .3s ease; }
+        .progress-stats { display: flex; gap: 24px; margin-top: 10px; }
+        .stat { display: flex; flex-direction: column; gap: 2px; }
+        .stat-val { font-size: 18px; font-weight: 700; color: var(--accent); }
+        .stat-lbl { font-size: 10px; color: var(--dim); letter-spacing: .05em; text-transform: uppercase; }
+
+        /* Log */
+        .log-wrap { flex: 1; overflow-y: auto; padding: 0; }
+        .log-table { width: 100%; border-collapse: collapse; }
+        .log-table th {
+            background: var(--surface);
+            border-bottom: 1px solid var(--border);
+            color: var(--dim);
+            font-size: 10px;
+            font-weight: 600;
+            letter-spacing: .1em;
+            padding: 8px 16px;
+            text-align: left;
+            text-transform: uppercase;
+            position: sticky;
+            top: 0;
+        }
+        .log-table td {
+            border-bottom: 1px solid rgba(30,30,46,.5);
+            font-size: 11px;
+            padding: 6px 16px;
+            max-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .log-table tr:hover td { background: var(--surface2); }
+        .log-table td.ok    { color: var(--accent); }
+        .log-table td.error { color: var(--error); }
+        .log-table td.dim   { color: var(--dim); }
+
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: var(--muted);
+            gap: 8px;
+            font-size: 11px;
+        }
+        .empty-state .icon { font-size: 32px; opacity: .3; }
+
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .spinner {
+            width: 10px; height: 10px;
+            border: 1px solid var(--muted);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin .8s linear infinite;
+            display: inline-block;
+        }
+    </style>
+</head>
+<body>
+
+<div class="header">
+    <span class="header-title">◈ Index Dashboard</span>
+    <a href="/">← Back to Gateway</a>
+    <span style="margin-left:auto;font-size:10px;color:var(--dim)" id="hdr-status">Connecting...</span>
+</div>
+
+<div class="main">
+    <!-- Sidebar -->
+    <div class="sidebar">
+        <div class="sidebar-hdr">
+            <h2>Jobs</h2>
+            <span class="spinner" id="refresh-spinner" style="display:none"></span>
+        </div>
+        <div class="jobs-list" id="jobs-list">
+            <div style="padding:16px;font-size:11px;color:var(--muted)">No jobs yet</div>
+        </div>
+        <div class="new-job">
+            <select id="nj-project"><option value="">Select project...</option></select>
+            <button class="btn" onclick="enqueueJob()" id="btn-enqueue">+ Start Index Job</button>
+        </div>
+    </div>
+
+    <!-- Detail -->
+    <div class="detail" id="detail">
+        <div class="empty-state">
+            <div class="icon">◈</div>
+            <div>Select a job or start a new one</div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const S = {
+        jobs:       {},  // job_id → job data
+        activeJob:  null,
+        projects:   [],
+        sseStreams:  {},  // job_id → EventSource
+    };
+
+    // ── API ───────────────────────────────────────────
+    async function api(method, path, body) {
+        const res = await fetch(path, {
+            method,
+            headers: {'Content-Type': 'application/json'},
+            body: body ? JSON.stringify(body) : undefined,
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || res.statusText);
+        }
+        return res.json();
+    }
+
+    // ── Load projects ─────────────────────────────────
+    async function loadProjects() {
+        try {
+            const d = await api('GET', '/api/projects');
+            S.projects = d.projects || [];
+            const sel = document.getElementById('nj-project');
+            sel.innerHTML = '<option value="">Select project...</option>' +
+                S.projects.map(p => `<option value="${p.name}">${p.name}</option>`).join('');
+        } catch(e) {}
+    }
+
+    // ── Enqueue job ───────────────────────────────────
+    async function enqueueJob() {
+        const project = document.getElementById('nj-project').value;
+        if (!project) return;
+
+        const btn = document.getElementById('btn-enqueue');
+        btn.disabled = true;
+
+        try {
+            const d = await api('POST', '/jobs/index', {project});
+            addJob({job_id: d.job_id, project, status: 'queued', done: 0, total: 0, pct: 0, errors: 0});
+            subscribeJob(d.job_id);
+            selectJob(d.job_id);
+        } catch(e) {
+            alert(e.message);
+        } finally {
+            btn.disabled = false;
+        }
+    }
+
+    // ── Subscribe to job SSE ──────────────────────────
+    function subscribeJob(job_id) {
+        if (S.sseStreams[job_id]) return; // already subscribed
+
+        const es = new EventSource('/jobs/' + job_id + '/stream');
+        S.sseStreams[job_id] = es;
+
+        es.onmessage = e => {
+            const d = JSON.parse(e.data);
+            handleJobEvent(job_id, d);
+        };
+
+        es.onerror = () => {
+            es.close();
+            delete S.sseStreams[job_id];
+        };
+    }
+
+    function handleJobEvent(job_id, d) {
+        const job = S.jobs[job_id] || {job_id, project: '', status: 'queued', done: 0, total: 0, pct: 0, errors: 0, log: []};
+        if (!job.log) job.log = [];
+
+        if (d.type === 'started') {
+            job.status  = 'running';
+            job.project = d.project;
+            job.log.push({file: '— started —', status: 'info', chunks: ''});
+        }
+
+        if (d.type === 'scanning') {
+            job.status = 'running';
+            job.log.push({file: 'Scanning files...', status: 'info', chunks: d.found || ''});
+        }
+
+        if (d.type === 'scan_done') {
+            job.total = d.total;
+            job.log.push({file: '— scan done —', status: 'info', chunks: d.total + ' files'});
+        }
+
+        if (d.type === 'file') {
+            job.done  = d.done;
+            job.total = d.total;
+            job.pct   = d.pct;
+            job.remaining_s = d.remaining_s;
+            if (d.status === 'error') job.errors = (job.errors || 0) + 1;
+            job.log.push({
+                file: d.file, status: d.status,
+                chunks: d.chunks || 0, error: d.error,
+            });
+            // Keep last 500 log entries
+            if (job.log.length > 500) job.log.splice(0, job.log.length - 500);
+        }
+
+        if (d.type === 'done') {
+            job.status   = 'done';
+            job.total_ms = d.total_ms;
+            job.log.push({file: '— done —', status: 'ok',
+                chunks: d.indexed + ' indexed, ' + d.errors + ' errors'});
+            if (S.sseStreams[job_id]) {
+                S.sseStreams[job_id].close();
+                delete S.sseStreams[job_id];
+            }
+        }
+
+        if (d.type === 'cancelled') {
+            job.status = 'cancelled';
+            job.log.push({file: '— cancelled —', status: 'warn', chunks: d.done + '/' + d.total});
+            if (S.sseStreams[job_id]) {
+                S.sseStreams[job_id].close();
+                delete S.sseStreams[job_id];
+            }
+        }
+
+        if (d.type === 'error') {
+            job.status = 'failed';
+            job.log.push({file: '— error —', status: 'error', chunks: d.error || ''});
+        }
+
+        S.jobs[job_id] = job;
+        renderJobList();
+        if (S.activeJob === job_id) renderDetail(job_id);
+    }
+
+    // ── Cancel ────────────────────────────────────────
+    async function cancelJob(job_id) {
+        try {
+            await api('POST', '/jobs/' + job_id + '/cancel');
+            const job = S.jobs[job_id];
+            if (job) { job.status = 'cancelling'; renderJobList(); }
+        } catch(e) { alert(e.message); }
+    }
+
+    // ── Render ────────────────────────────────────────
+    function addJob(job) {
+        if (!job.log) job.log = [];
+        S.jobs[job.job_id] = job;
+        renderJobList();
+    }
+
+    function selectJob(job_id) {
+        S.activeJob = job_id;
+        renderJobList();
+        renderDetail(job_id);
+    }
+
+    function fmtTime(s) {
+        if (!s || s <= 0) return 'done';
+        if (s < 60)   return '~' + s + 's left';
+        if (s < 3600) return '~' + Math.ceil(s/60) + 'm left';
+        const h = Math.floor(s/3600);
+        const m = Math.ceil((s%3600)/60);
+        return '~' + h + 'h ' + m + 'm left';
+    }
+
+    function renderJobList() {
+        const el = document.getElementById('jobs-list');
+        const jobs = Object.values(S.jobs);
+        if (!jobs.length) {
+            el.innerHTML = '<div style="padding:16px;font-size:11px;color:var(--muted)">No jobs yet</div>';
+            return;
+        }
+        el.innerHTML = jobs.reverse().map(j => `
+    <div class="job-item ${S.activeJob === j.job_id ? 'active' : ''}" onclick="selectJob('${j.job_id}')">
+      <div class="job-project">${j.project || j.job_id.slice(0,8)}</div>
+      <div class="job-meta">
+        <span class="job-status ${j.status}">${j.status}</span>
+        ${j.pct > 0 ? `<span>${j.pct}%</span>` : ''}
+        ${j.total > 0 ? `<span>${j.done}/${j.total}</span>` : ''}
+        ${j.errors > 0 ? `<span style="color:var(--error)">${j.errors} err</span>` : ''}
+      </div>
+    </div>`).join('');
+    }
+
+    function renderDetail(job_id) {
+        const job = S.jobs[job_id];
+        if (!job) return;
+
+        const detail  = document.getElementById('detail');
+        const isActive = job.status === 'running' || job.status === 'queued';
+
+        detail.innerHTML = `
+    <div class="detail-hdr">
+      <div>
+        <h2>${job.project}</h2>
+        <div style="font-size:10px;color:var(--dim);margin-top:2px">${job.job_id}</div>
+      </div>
+      <div class="actions">
+        ${isActive ? `<button class="btn btn-cancel" onclick="cancelJob('${job_id}')" style="padding:6px 14px;font-size:10px">Cancel</button>` : ''}
+      </div>
+    </div>
+
+    <div class="progress-wrap">
+      <div class="progress-info">
+        <span>${job.done || 0} / ${job.total || 0} files</span>
+        <span>${job.remaining_s > 0 ? fmtTime(job.remaining_s) : (job.total_ms ? ((job.total_ms/1000).toFixed(1) + 's total') : '')}</span>
+      </div>
+      <div class="progress-bar-bg">
+        <div class="progress-bar-fill" style="width:${job.pct || 0}%"></div>
+      </div>
+      <div class="progress-stats">
+        <div class="stat">
+          <span class="stat-val">${job.pct || 0}%</span>
+          <span class="stat-lbl">Progress</span>
+        </div>
+        <div class="stat">
+          <span class="stat-val">${job.done || 0}</span>
+          <span class="stat-lbl">Indexed</span>
+        </div>
+        <div class="stat">
+          <span class="stat-val" style="color:${(job.errors||0)>0?'var(--error)':'var(--accent)'}">${job.errors || 0}</span>
+          <span class="stat-lbl">Errors</span>
+        </div>
+        <div class="stat">
+          <span class="stat-val job-status ${job.status}" style="font-size:12px;padding:2px 8px">${job.status}</span>
+          <span class="stat-lbl">Status</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="log-wrap">
+      <table class="log-table">
+        <thead><tr>
+          <th style="width:50%">File</th>
+          <th style="width:10%">Status</th>
+          <th style="width:10%">Chunks</th>
+          <th>Error</th>
+        </tr></thead>
+        <tbody id="log-body">
+          ${(job.log || []).slice(-200).reverse().map(l => `
+            <tr>
+              <td title="${l.file}">${l.file}</td>
+              <td class="${l.status === 'ok' ? 'ok' : l.status === 'error' ? 'error' : 'dim'}">${l.status || ''}</td>
+              <td class="dim">${l.chunks !== undefined ? l.chunks : ''}</td>
+              <td class="error">${l.error || ''}</td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
+    }
+
+    // ── Poll active streams ───────────────────────────
+    async function pollActiveStreams() {
+        try {
+            const d = await api('GET', '/index/active');
+            const streams = d.streams || [];
+
+            streams.forEach(s => {
+                const tid = s.task_id;
+                if (!S.jobs[tid]) {
+                    const log = (s.errors_detail || []).map(e => ({
+                        file: e.file, status: 'error', chunks: 0, error: e.error
+                    }));
+                    addJob({
+                        job_id:  tid,
+                        project: s.project,
+                        status:  s.status || 'running',
+                        done: s.done || 0, total: s.total || 0,
+                        pct: s.pct || 0, errors: s.errors || 0,
+                        log,
+                    });
+                    subscribeStreamJob(tid);
+                    if (!S.activeJob) selectJob(tid);
+                } else {
+                    const job = S.jobs[tid];
+                    job.status = s.status;
+                    job.done   = s.done;
+                    job.total  = s.total;
+                    job.pct    = s.pct;
+                    job.errors = s.errors;
+
+                    // Merge new error entries
+                    const existingFiles = new Set(job.log.map(l => l.file + l.status));
+                    (s.errors_detail || []).forEach(e => {
+                        const key = e.file + 'error';
+                        if (!existingFiles.has(key)) {
+                            job.log.push({file: e.file, status: 'error', chunks: 0, error: e.error});
+                            existingFiles.add(key);
+                        }
+                    });
+                    if (job.log.length > 500) job.log.splice(0, job.log.length - 500);
+                    S.jobs[tid] = job;
+                }
+            });
+
+            if (streams.length > 0) {
+                renderJobList();
+                if (S.activeJob && S.jobs[S.activeJob]) renderDetail(S.activeJob);
+            }
+        } catch(e) {}
+    }
+
+    // Subscribe to SSE stream from /index/stream (not Redis)
+    function subscribeStreamJob(task_id) {
+        if (S.sseStreams[task_id]) return;
+
+        // We can't subscribe after the fact to an existing SSE stream
+        // So we poll /index/active for updates instead
+        S.sseStreams[task_id] = 'polling';  // mark as tracked
+    }
+
+    // ── Init ──────────────────────────────────────────
+    async function init() {
+        await loadProjects();
+        document.getElementById('hdr-status').textContent = 'Ready';
+
+        // Load Redis jobs
+        try {
+            const d = await api('GET', '/jobs');
+            (d.jobs || []).forEach(j => {
+                addJob({
+                    job_id:  j.job_id,
+                    project: j.args || j.job_id.slice(0,8),
+                    status:  j.status,
+                    done: 0, total: 0, pct: 0, errors: 0, log: [],
+                });
+                if (j.status === 'in_progress') subscribeJob(j.job_id);
+            });
+        } catch(e) {}
+
+        // Poll active SSE streams every 2s
+        pollActiveStreams();
+        setInterval(pollActiveStreams, 2000);
+    }
+
+    init();
+</script>
+</body>
+</html>

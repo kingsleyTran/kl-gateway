@@ -2,20 +2,17 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# System deps
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    docker.io \
     && rm -rf /var/lib/apt/lists/*
 
-# Python deps first (layer cache)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# App source
 COPY . .
 
-# Config dir (lưu .env + gateway.db)
-RUN mkdir -p /config
+RUN mkdir -p /config /copilot-data
 
 EXPOSE 8080
 

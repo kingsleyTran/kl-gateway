@@ -228,28 +228,198 @@ async def openai_oauth_status():
 # ── Gemini ────────────────────────────────────────
 @router.post("/gemini/verify")
 async def verify_gemini(body: GeminiSetup):
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(
-            f"https://generativelanguage.googleapis.com/v1beta/models?key={body.api_key}",
-            timeout=10,
-        )
-    if resp.status_code != 200:
-        raise HTTPException(400, detail=f"Invalid Gemini key: HTTP {resp.status_code}")
-
-    all_models = resp.json().get("models", [])
-    ALLOWED = ("gemini-2", "gemini-3", "gemini-1.5")
-    BLOCKED  = ("embed", "vision", "aqa")
-    models = sorted({
-        m["name"].replace("models/", "")
-        for m in all_models
-        if any(m["name"].replace("models/","").startswith(p) for p in ALLOWED)
-           and not any(k in m["name"] for k in BLOCKED)
-    })
-    return {"valid": True, "message": f"Gemini verified — {len(models)} models", "models": models}
+    # Use new google-genai SDK to list models
+    try:
+        from google import genai as google_genai
+        client = google_genai.Client(api_key=body.api_key)
+        all_models = list(client.models.list())
+        BLOCKED = ("embed", "vision", "aqa", "text-", "chat-")
+        models = sorted({
+            m.name.replace("models/", "")
+            for m in all_models
+            if not any(k in m.name for k in BLOCKED)
+               and "gemini" in m.name
+        })
+        return {"valid": True, "message": f"Gemini verified — {len(models)} models", "models": models}
+    except Exception as e:
+        raise HTTPException(400, detail=f"Invalid Gemini key: {str(e)}")
 
 
 # GitHub Copilot OAuth bị GitHub block (403 Forbidden).
 # Removed — dùng OpenAI hoặc Gemini thay thế.
+
+
+# ── Copilot Auth Flow ─────────────────────────────
+# copilot-api expose endpoints:
+#   POST /api/auth/initiate  → { userCode, verificationUrl, deviceCode, interval }
+#   POST /api/auth/poll      → { status: "pending"|"success", token? }
+
+@router.get("/copilot/status")
+async def copilot_status():
+    """Check copilot-api sidecar status + auth state."""
+    import os
+    copilot_url = os.getenv("COPILOT_API_URL", "http://copilot-api:4141")
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(f"{copilot_url}/v1/models", timeout=5)
+        if resp.status_code == 200:
+            models = [m["id"] for m in resp.json().get("data", [])]
+            return {"online": True, "authed": True, "models": models}
+        return {"online": True, "authed": False}
+    except httpx.ConnectError:
+        return {"online": False, "authed": False}
+    except Exception as e:
+        return {"online": False, "authed": False, "error": str(e)}
+
+
+@router.post("/copilot/auth/start")
+async def copilot_auth_start():
+    """
+    Trigger GitHub device flow qua copilot-api sidecar.
+    copilot-api dùng GitHub device flow natively —
+    gateway chạy device flow trực tiếp thay vì relay qua sidecar.
+    """
+    # Dùng GitHub device flow trực tiếp (giống flow cũ)
+    # copilot-api sẽ tự pick up token từ volume sau khi auth
+    GITHUB_CLIENT_ID  = "Iv1.b507a08c87ecfe98"
+    GITHUB_DEVICE_URL = "https://github.com/login/device/code"
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            GITHUB_DEVICE_URL,
+            data={"client_id": GITHUB_CLIENT_ID, "scope": "read:user"},
+            headers={"Accept": "application/json"},
+            timeout=10,
+        )
+    if resp.status_code != 200:
+        raise HTTPException(502, detail="GitHub device flow failed")
+    d = resp.json()
+    return {
+        "user_code":        d["user_code"],
+        "verification_url": d["verification_uri"],
+        "device_code":      d["device_code"],
+        "interval":         d.get("interval", 5),
+        "expires_in":       d.get("expires_in", 899),
+    }
+
+
+@router.post("/copilot/auth/poll")
+async def copilot_auth_poll(body: dict):
+    """
+    Poll GitHub token.
+    Khi có token → lưu vào DB + ghi ra .env để copilot-api container pick up.
+    """
+    import os, subprocess
+    device_code = body.get("device_code", "")
+    GITHUB_CLIENT_ID = "Iv1.b507a08c87ecfe98"
+    GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token"
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            GITHUB_TOKEN_URL,
+            data={
+                "client_id":   GITHUB_CLIENT_ID,
+                "device_code": device_code,
+                "grant_type":  "urn:ietf:params:oauth:grant-type:device_code",
+            },
+            headers={"Accept": "application/json"},
+            timeout=10,
+        )
+    data = resp.json()
+
+    if "access_token" in data:
+        token = data["access_token"]
+
+        # 1. Lưu vào SQLite
+        await set_config("copilot_enabled", "1")
+        await set_config("copilot_github_token", token)
+
+        # 2. Ghi token vào 2 file:
+        #    - github_token : copilot-api đọc trực tiếp
+        #    - env          : copilot-api đọc qua env_file khi restart
+        import os as _os
+        import asyncio as _aio
+
+        token_dir = "/copilot-data"
+        try:
+            _os.makedirs(token_dir, exist_ok=True)
+
+            # File token trực tiếp
+            token_path = f"{token_dir}/github_token"
+            with open(token_path, "w") as f:
+                f.write(token)
+            _os.chmod(token_path, 0o600)
+
+            # File env cho docker env_file — persist qua restart
+            env_path = f"{token_dir}/env"
+            with open(env_path, "w") as f:
+                f.write("GITHUB_TOKEN=" + token + chr(10))
+            _os.chmod(env_path, 0o600)
+
+        except Exception as e:
+            print(f"Warning: could not write token files: {e}")
+
+        # 3. Restart copilot-api để pick up token
+        try:
+            proc = await _aio.create_subprocess_exec(
+                "docker", "restart", "copilot-api",
+                stdout=_aio.subprocess.PIPE,
+                stderr=_aio.subprocess.PIPE,
+            )
+            await proc.communicate()
+            return {"status": "success", "restarted": True}
+        except Exception:
+            return {"status": "success", "restarted": False,
+                    "note": "Run manually: docker restart copilot-api"}
+
+    error = data.get("error", "unknown")
+    if error in ("expired_token", "access_denied"):
+        raise HTTPException(400, detail=f"Auth failed: {error}")
+    return {"status": "slow_down" if error == "slow_down" else "pending"}
+
+
+@router.post("/copilot/restart")
+async def copilot_restart():
+    """
+    Restart copilot-api để apply token mới.
+    Dùng docker socket nếu available, fallback về hướng dẫn thủ công.
+    """
+    import asyncio as _asyncio
+    try:
+        proc = await _asyncio.create_subprocess_exec(
+            "docker", "restart", "copilot-api",
+            stdout=_asyncio.subprocess.PIPE,
+            stderr=_asyncio.subprocess.PIPE,
+        )
+        await proc.communicate()
+        return {"status": "restarted"}
+    except FileNotFoundError:
+        # docker CLI không có trong container — user restart thủ công
+        return {
+            "status": "manual",
+            "message": "Run: docker restart copilot-api"
+        }
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+
+@router.post("/copilot/verify")
+async def verify_copilot():
+    """Verify copilot-api accessible và đã auth."""
+    import os
+    copilot_url = os.getenv("COPILOT_API_URL", "http://copilot-api:4141")
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(f"{copilot_url}/v1/models", timeout=5)
+        if resp.status_code != 200:
+            raise HTTPException(400, detail=f"copilot-api HTTP {resp.status_code} — need to auth first")
+        models = [m["id"] for m in resp.json().get("data", [])]
+        await set_config("copilot_enabled", "1")
+        return {"valid": True, "message": f"Copilot ready — {len(models)} models", "models": models}
+    except httpx.ConnectError:
+        raise HTTPException(503, detail="copilot-api not reachable")
+    except Exception as e:
+        raise HTTPException(503, detail=str(e))
 
 
 # ── Save — ghi vào SQLite ─────────────────────────
@@ -261,6 +431,9 @@ async def save_bootstrap(body: SaveConfig):
     if body.providers.get("gemini", {}).get("api_key"):
         await set_config("gemini_key", body.providers["gemini"]["api_key"])
 
+    if body.providers.get("copilot", {}).get("enabled"):
+        await set_config("copilot_enabled", "1")
+
     if body.providers.get("copilot", {}).get("token"):
         await set_config("copilot_token", body.providers["copilot"]["token"])
 
@@ -271,5 +444,3 @@ async def save_bootstrap(body: SaveConfig):
         "bootstrapped":  await is_bootstrapped(),
         "default_model": body.default_model,
     }
-
-

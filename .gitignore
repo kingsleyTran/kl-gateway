@@ -11,3 +11,5 @@ ENV/
 # macOS system files
 .DS_Store
 /projects
+/data/*
+/copilot-data

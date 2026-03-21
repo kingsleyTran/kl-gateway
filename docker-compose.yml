@@ -1,38 +1,86 @@
+version: "3.9"
+
 # ─────────────────────────────────────────────────────────────────
-# Full stack — tất cả chạy trong Docker.
-# Projects: copy folder project vào ./projects/<tên>/
-# Ví dụ: cp -r ~/Desktop/projects/my-app ./projects/my-app
-#
+# OpenClaw Gateway Stack
+# Tất cả data lưu trong ./data/ — dễ backup, dễ inspect.
 # Khởi động: ./start.sh
 # ─────────────────────────────────────────────────────────────────
 
 services:
 
-  # ── Vector Store ────────────────────────────────
+  # ── Redis (job queue) ───────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./data/redis:/data
+    command: redis-server --appendonly yes
+    networks:
+      - openclaw_net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── Index Worker (arq) ───────────────────────────
+  worker:
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile
+    container_name: worker
+    volumes:
+      - ./projects:/projects:ro
+      - ./data/gateway:/config
+      - ./gateway:/app
+    environment:
+      - CHROMA_HOST=chromadb
+      - CHROMA_PORT=8000
+      - OLLAMA_HOST=ollama
+      - OLLAMA_PORT=11434
+      - EMBED_MODEL=nomic-embed-text
+      - HOST_MOUNT_PREFIX=/projects
+      - REDIS_URL=redis://redis:6379
+    command: ["arq", "worker.WorkerSettings"]
+    depends_on:
+      chromadb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - openclaw_net
+    restart: unless-stopped
+
+  # ── ChromaDB ────────────────────────────────────
   chromadb:
     image: chromadb/chroma:0.5.20
     container_name: chromadb
     ports:
       - "8000:8000"
     volumes:
-      - chroma_data:/chroma/chroma
+      - ./data/chroma:/chroma/chroma
+    environment:
+      - ANONYMIZED_TELEMETRY=false
+      - CHROMA_TELEMETRY=false
     networks:
       - openclaw_net
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat" ]
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/api/v1/heartbeat || exit 1"]
       interval: 5s
-      timeout: 3s
+      timeout: 5s
       retries: 10
       start_period: 10s
 
-  # ── Embedding Model ─────────────────────────────
+  # ── Ollama ───────────────────────────────────────
   ollama:
     image: ollama/ollama:latest
     container_name: ollama
     ports:
       - "11434:11434"
     volumes:
-      - ollama_data:/root/.ollama
+      - ./data/ollama:/root/.ollama
     networks:
       - openclaw_net
     # GPU (uncomment nếu có):
@@ -44,7 +92,24 @@ services:
     #           count: 1
     #           capabilities: [gpu]
 
-  # ── Gateway ─────────────────────────────────────
+  # ── Copilot API ──────────────────────────────────
+  copilot-api:
+    image: ghcr.io/ericc-ch/copilot-api:latest
+    container_name: copilot-api
+    ports:
+      - "4141:4141"
+    volumes:
+      - ./data/copilot:/root/.local/share/copilot-api
+    env_file:
+      # Gateway ghi token vào file này sau khi auth
+      # copilot-api tự đọc GITHUB_TOKEN từ env khi start
+      - path: ./data/copilot/env
+        required: false
+    networks:
+      - openclaw_net
+    restart: unless-stopped
+
+  # ── Gateway ──────────────────────────────────────
   gateway:
     build:
       context: ./gateway
@@ -53,19 +118,12 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      # App source bind mount để uvicorn --reload hot-reload khi sửa file local
-      - ./gateway:/app
-      # Reuse local Codex login from host for web-first import flow
-      - ${HOME}/.codex:/root/.codex:ro
-      # Projects — mỗi folder 1 volume, tên tùy ý
-      # Thêm project mới: thêm 1 dòng, đổi tên sau dấu :
-      # Format: /path/on/host:/projects/<tên>:ro
       - ./projects:/projects:ro
-      # Ví dụ thêm project từ path khác:
-      # - /Users/kingsley/work/backend:/projects/backend:ro
-      # - /Users/kingsley/Desktop/lisroe:/projects/lisroe:ro
-      # Config riêng (rw) — gateway.db
-      - gateway_config:/config
+      - ./data/gateway:/config
+      - ./data/copilot:/copilot-data
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Hot reload — mount source trực tiếp, uvicorn tự reload khi sửa file
+      - ./gateway:/app
     environment:
       - CHROMA_HOST=chromadb
       - CHROMA_PORT=8000
@@ -73,22 +131,20 @@ services:
       - OLLAMA_PORT=11434
       - EMBED_MODEL=nomic-embed-text
       - HOST_MOUNT_PREFIX=/projects
-      # Tắt ChromaDB telemetry warning
+      - COPILOT_API_URL=http://copilot-api:4141
+      - REDIS_URL=redis://redis:6379
       - ANONYMIZED_TELEMETRY=false
       - CHROMA_TELEMETRY=false
     depends_on:
       chromadb:
         condition: service_healthy
-      ollama:
+      redis:
+        condition: service_healthy
+      copilot-api:
         condition: service_started
     restart: unless-stopped
     networks:
       - openclaw_net
-
-volumes:
-  chroma_data:
-  ollama_data:
-  gateway_config:
 
 networks:
   openclaw_net:

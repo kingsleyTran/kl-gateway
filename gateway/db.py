@@ -93,9 +93,13 @@ async def get_all_config() -> dict:
 
 
 async def is_bootstrapped() -> bool:
-    """Gateway coi là bootstrapped nếu có OpenAI hoặc Gemini key."""
+    """Gateway coi là bootstrapped nếu có ít nhất 1 provider."""
     cfg = await get_all_config()
-    return bool(cfg.get("openai_key") or cfg.get("gemini_key"))
+    return bool(
+        cfg.get("openai_key") or
+        cfg.get("gemini_key") or
+        cfg.get("copilot_enabled")
+    )
 
 
 async def reset_config():
@@ -108,6 +112,53 @@ async def reset_config():
             if key not in INFRA_KEYS:
                 await db.execute("DELETE FROM config WHERE key = ?", (key,))
         await db.commit()
+
+
+# ── Chat history ──────────────────────────────────
+async def save_chat_message(project: str, role: str, content_text: str, meta: dict = None):
+    import json as _j
+    async with aiosqlite.connect(get_db_path()) as db:
+        await db.execute("""
+                         CREATE TABLE IF NOT EXISTS chat_history (
+                                                                     id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                                                                     project    TEXT NOT NULL,
+                                                                     role       TEXT NOT NULL,
+                                                                     content    TEXT NOT NULL,
+                                                                     meta       TEXT DEFAULT '{}',
+                                                                     created_at TEXT DEFAULT (datetime('now'))
+                             )
+                         """)
+        await db.execute(
+            "INSERT INTO chat_history (project, role, content, meta) VALUES (?,?,?,?)",
+            (project, role, content_text, _j.dumps(meta or {}))
+        )
+        await db.commit()
+
+
+async def get_chat_history(project: str, limit: int = 50) -> list[dict]:
+    import json as _j
+    try:
+        async with aiosqlite.connect(get_db_path()) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                    "SELECT * FROM chat_history WHERE project=? ORDER BY created_at DESC LIMIT ?",
+                    (project, limit)
+            ) as cur:
+                rows = await cur.fetchall()
+        return [{"id": r["id"], "role": r["role"], "content": r["content"],
+                 "meta": _j.loads(r["meta"]), "created_at": r["created_at"]}
+                for r in reversed(rows)]
+    except Exception:
+        return []
+
+
+async def clear_chat_history(project: str):
+    try:
+        async with aiosqlite.connect(get_db_path()) as db:
+            await db.execute("DELETE FROM chat_history WHERE project=?", (project,))
+            await db.commit()
+    except Exception:
+        pass
 
 
 # ── Project helpers ────────────────────────────────

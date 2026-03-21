@@ -323,6 +323,7 @@
   </div>
   <div class="topbar-right">
     <div id="provider-pills" style="display:flex;gap:6px;"></div>
+    <a href="/dashboard" target="_blank" class="tbtn" style="text-decoration:none">Dashboard</a>
     <button class="tbtn" onclick="confirmReset()">Reset config</button>
   </div>
 </header>
@@ -346,10 +347,10 @@
       <option value="">— select —</option>
     </select>
     <span class="tlabel">Model</span>
-    <select class="sel" id="sel-model"><option value="">loading...</option></select>
+    <select class="sel" id="sel-model" onchange="sessionStorage.setItem('gw_model',this.value)"><option value="">loading...</option></select>
     <span id="ollama-status" style="font-size:10px;padding:4px 8px;border-radius:2px;display:none"></span>
     <span class="tlabel">top_k</span>
-    <select class="sel" id="sel-topk">
+    <select class="sel" id="sel-topk" onchange="sessionStorage.setItem('gw_topk',this.value)">
       <option value="3">3</option><option value="5" selected>5</option>
       <option value="8">8</option><option value="10">10</option>
     </select>
@@ -480,12 +481,27 @@
   async function init() {
     await Promise.all([loadProjects(), loadModels(), loadProviders()]);
     checkServices();
-    setInterval(checkServices, 15000); // re-check mỗi 15s
+    setInterval(checkServices, 15000);
+
+    // Restore last selected project/model from sessionStorage
+    const savedProject = sessionStorage.getItem('gw_project');
+    const savedModel   = sessionStorage.getItem('gw_model');
+    const savedTopK    = sessionStorage.getItem('gw_topk');
+    if (savedProject) {
+      document.getElementById('sel-project').value = savedProject;
+      S.selectedProject = savedProject;
+      renderProjectList();
+      loadChatHistory(savedProject);
+    }
+    if (savedModel) document.getElementById('sel-model').value = savedModel;
+    if (savedTopK)  document.getElementById('sel-topk').value  = savedTopK;
   }
 
   async function checkServices() {
     try {
       const d = await api('GET', '/services/health');
+
+      // Ollama status
       const el = document.getElementById('ollama-status');
       el.style.display = 'inline-block';
       if (d.ready) {
@@ -493,18 +509,48 @@
         el.style.background = 'rgba(0,255,157,.1)';
         el.style.color = 'var(--accent)';
         el.style.border = '1px solid rgba(0,255,157,.2)';
-      } else if (d.ollama.ok && !d.ollama.embed_ready) {
+      } else if (d.ollama?.ok && !d.ollama?.embed_ready) {
         el.textContent = '⚠ Pull embed model';
         el.style.background = 'rgba(255,170,0,.1)';
         el.style.color = 'var(--warn)';
         el.style.border = '1px solid rgba(255,170,0,.2)';
-        addLog('Ollama running but embed model not pulled. Run: docker exec ollama ollama pull nomic-embed-text', 'err');
       } else {
         el.textContent = '✗ Ollama offline';
         el.style.background = 'rgba(255,69,102,.1)';
         el.style.color = 'var(--error)';
         el.style.border = '1px solid rgba(255,69,102,.2)';
-        addLog('Ollama is not running. Start with: docker compose up -d ollama', 'err');
+      }
+
+      // Copilot status
+      const cop = d.copilot;
+      let copEl = document.getElementById('copilot-status');
+      if (!copEl) {
+        copEl = document.createElement('span');
+        copEl.id = 'copilot-status';
+        copEl.style.cssText = 'font-size:10px;padding:4px 8px;border-radius:2px;cursor:pointer';
+        el.parentElement.insertBefore(copEl, el.nextSibling);
+      }
+      copEl.style.display = 'inline-block';
+
+      if (cop?.ok && cop?.authed) {
+        copEl.textContent = '⌘ Copilot ready';
+        copEl.style.background = 'rgba(0,255,157,.1)';
+        copEl.style.color = 'var(--accent)';
+        copEl.style.border = '1px solid rgba(0,255,157,.2)';
+        copEl.onclick = null;
+      } else if (cop?.ok && !cop?.authed) {
+        copEl.textContent = '⌘ Copilot: auth expired — click to re-auth';
+        copEl.style.background = 'rgba(255,69,102,.1)';
+        copEl.style.color = 'var(--error)';
+        copEl.style.border = '1px solid rgba(255,69,102,.2)';
+        copEl.onclick = () => window.open('/', '_self');
+        addLog('Copilot auth expired — need to re-authenticate', 'err');
+      } else {
+        copEl.textContent = '⌘ Copilot offline';
+        copEl.style.background = 'rgba(255,170,0,.1)';
+        copEl.style.color = 'var(--warn)';
+        copEl.style.border = '1px solid rgba(255,170,0,.2)';
+        copEl.onclick = null;
       }
     } catch {}
   }
@@ -580,7 +626,13 @@
 
   function onProjectChange() {
     const v = document.getElementById('sel-project').value;
-    if (v) { S.selectedProject = v; renderProjectList(); }
+    if (v) {
+      S.selectedProject = v;
+      sessionStorage.setItem('gw_project', v);
+      renderProjectList();
+      document.getElementById('messages').innerHTML = '';
+      loadChatHistory(v);
+    }
   }
 
   // ── Folder browser ────────────────────────────────
@@ -689,7 +741,9 @@
     const inp  = document.getElementById('chat-input');
     const text = inp.value.trim();
     if (!text || S.busy) return;
-    inp.value = ''; autoResize(inp);
+    inp.value = '';
+    autoResize(inp);
+    inp.focus();
 
     if (text.startsWith('/')) { await handleSlash(text); return; }
 
@@ -859,13 +913,28 @@
             const m = d.metrics || {};
             const bubble = document.querySelector('#' + bid + ' .bubble');
             if (bubble) {
+              const diffId = 'diff-' + Date.now();
               bubble.insertAdjacentHTML('beforeend', `
-              <div class="diff-block" style="margin-top:8px">
+              <div class="diff-block" style="margin-top:8px" id="${diffId}">
                 <div class="diff-hdr">
                   <span>${esc(diff.file||'')}</span>
                   <span>${(diff.changes||[]).length} change(s)</span>
                 </div>
                 <div class="diff-body">${changes}</div>
+              </div>
+              <div style="display:flex;gap:8px;margin-top:10px">
+                <button onclick="approveDiff('${diffId}','${esc(d.project)}','${esc(diff.file||'')}',${JSON.stringify(diff.changes||[])})"
+                  style="background:var(--accent);border:none;border-radius:2px;color:var(--bg);
+                         font-family:var(--mono);font-size:10px;font-weight:700;letter-spacing:.1em;
+                         text-transform:uppercase;padding:6px 14px;cursor:pointer">
+                  ✓ Apply
+                </button>
+                <button onclick="rejectDiff('${diffId}')"
+                  style="background:transparent;border:1px solid var(--error);border-radius:2px;
+                         color:var(--error);font-family:var(--mono);font-size:10px;
+                         letter-spacing:.1em;text-transform:uppercase;padding:6px 14px;cursor:pointer">
+                  ✕ Reject
+                </button>
               </div>
               <div class="msg-meta" style="margin-top:6px">
                 ${esc(m.model||'')} · ${m.tokens?.total||0} tokens · ${(m.timings?.total_ms||0)}ms
@@ -981,7 +1050,7 @@
             document.getElementById(`${pid}-bar`).style.width  = d.pct + '%';
             document.getElementById(`${pid}-pct`).textContent  = d.pct + '%';
             document.getElementById(`${pid}-eta`).textContent  =
-                    d.remaining_s > 0 ? `~${d.remaining_s}s left` : 'almost done';
+                    d.remaining_s > 0 ? fmtTime(d.remaining_s) : 'almost done';
             document.getElementById(`${pid}-file`).textContent =
                     `${d.done} / ${d.total} — ${d.file}`;
 
@@ -1160,6 +1229,13 @@
   function scrollBot(el){el.scrollTop=el.scrollHeight;}
   function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
   function fmt(n){return n==null?'—':n>=1000?(n/1000).toFixed(1)+'k':String(n);}
+  function fmtTime(s) {
+    if (s < 60) return '~' + s + 's left';
+    if (s < 3600) return '~' + Math.ceil(s/60) + 'm left';
+    const h = Math.floor(s/3600);
+    const m = Math.ceil((s%3600)/60);
+    return '~' + h + 'h ' + m + 'm left';
+  }
   function setBusy(v){S.busy=v;document.getElementById('send-btn').disabled=v;}
 
   async function api(method, path, body) {
@@ -1199,16 +1275,18 @@
   async function cancelIndex(pid) {
     const btn = document.getElementById(`${pid}-cancel`);
     if (btn) { btn.disabled = true; btn.textContent = 'Cancelling...'; }
-    // task_id is captured in closure via currentTaskId — pass via data attr
+
     const taskIdEl = document.getElementById(`${pid}-taskid`);
-    const taskId = taskIdEl ? taskIdEl.value : null;
-    if (taskId) {
+    const taskId   = taskIdEl ? taskIdEl.value : null;
+
+    // Cancel với task_id nếu có, không thì cancel all
+    try {
       await fetch('/index/cancel', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({task_id: taskId}),
+        body: JSON.stringify({task_id: taskId || null}),
       });
-    }
+    } catch(e) {}
     addLog('Cancel requested...', 'dim');
   }
 
@@ -1235,6 +1313,76 @@
   function clearLogs() {
     document.getElementById('log-panel').innerHTML =
             '<div class="log-entry dim">Waiting for activity...</div>';
+  }
+
+  // ── Approve / Reject diff ─────────────────────────
+  async function approveDiff(diffId, project, filePath, changes) {
+    const block = document.getElementById(diffId);
+    try {
+      await api('POST', '/history/' + encodeURIComponent(project) + '/approve',
+              { file_path: filePath, changes: changes || [] });
+      const actions = block?.nextElementSibling;
+      if (actions) actions.innerHTML =
+              '<span style="font-size:11px;color:var(--accent)">✓ Applied & re-indexed</span>';
+      addLog('Diff applied: ' + filePath, 'ok');
+      await loadProjects(); // Refresh indexed count
+    } catch(e) {
+      addLog('Apply failed: ' + e.message, 'err');
+      gwMsg('❌ ' + e.message, 'error');
+    }
+  }
+
+  function rejectDiff(diffId) {
+    const block = document.getElementById(diffId);
+    const actions = block?.nextElementSibling;
+    if (actions) actions.innerHTML =
+            '<span style="font-size:11px;color:var(--error)">✕ Rejected</span>';
+    addLog('Diff rejected', 'dim');
+  }
+
+  // ── Chat history ───────────────────────────────────
+  async function loadChatHistory(project) {
+    if (!project) return;
+    try {
+      const d = await api('GET', '/history/' + encodeURIComponent(project) + '?limit=30');
+      const msgs = document.getElementById('messages');
+      if (!d.history?.length) return;
+
+      // Show separator
+      msgs.insertAdjacentHTML('beforeend',
+              '<div style="text-align:center;font-size:10px;color:var(--muted);padding:8px 0;border-top:1px solid var(--border);margin-bottom:4px">─── previous session ───</div>');
+
+      d.history.forEach(h => {
+        if (h.role === 'user') {
+          msgs.insertAdjacentHTML('beforeend', `
+          <div class="msg-row user">
+            <div class="avatar usr">U</div>
+            <div class="bubble" style="opacity:.7">${esc(h.content)}</div>
+          </div>`);
+        } else if (h.role === 'assistant' && h.content) {
+          const meta = h.meta || {};
+          msgs.insertAdjacentHTML('beforeend', `
+          <div class="msg-row">
+            <div class="avatar gw">GW</div>
+            <div class="bubble" style="opacity:.7">
+              ✓ ${esc(h.content)}
+              <div class="msg-meta">${meta.model||''} · ${meta.tokens?.total||0} tokens</div>
+            </div>
+          </div>`);
+        }
+      });
+      scrollBot(msgs);
+    } catch(e) {}
+  }
+
+  async function clearHistory(project) {
+    if (!project) return;
+    if (!confirm('Clear chat history for ' + project + '?')) return;
+    try {
+      await api('DELETE', '/history/' + encodeURIComponent(project));
+      document.getElementById('messages').innerHTML =
+              '<div class="empty"><div class="ei">◈</div><p>History cleared.</p></div>';
+    } catch(e) {}
   }
 
   function confirmReset(){

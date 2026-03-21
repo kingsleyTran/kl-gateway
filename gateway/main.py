@@ -4,7 +4,6 @@ Bootstrap state đọc từ SQLite mỗi request — không cache, không .env.
 Dùng lifespan để init DB đúng cách với uvloop.
 """
 
-import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -17,11 +16,6 @@ from db import init_db, is_bootstrapped
 
 CONFIG_DIR = Path(os.getenv("CONFIG_DIR", "/config"))
 STATIC_DIR = Path(__file__).parent / "bootstrap" / "static"
-
-logging.basicConfig(
-    level=os.getenv("LOG_LEVEL", "INFO").upper(),
-    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
-)
 
 
 @asynccontextmanager
@@ -37,7 +31,7 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
 # ── Middleware ─────────────────────────────────────
-ALWAYS_ALLOW = ("/api/bootstrap", "/health", "/static", "/")
+ALWAYS_ALLOW = ("/api/bootstrap", "/health", "/static", "/", "/dashboard")
 
 @app.middleware("http")
 async def bootstrap_guard(request: Request, call_next):
@@ -53,11 +47,12 @@ async def bootstrap_guard(request: Request, call_next):
 
 
 # ── Routers ───────────────────────────────────────
-from routers import bootstrap_router, task_router, project_router
+from routers import bootstrap_router, task_router, project_router, jobs_router
 
 app.include_router(bootstrap_router.router, prefix="/api/bootstrap", tags=["bootstrap"])
 app.include_router(project_router.router,   prefix="/api/projects",  tags=["projects"])
 app.include_router(task_router.router,                               tags=["tasks"])
+app.include_router(jobs_router.router,                               tags=["jobs"])
 
 
 # ── Root ──────────────────────────────────────────
@@ -71,6 +66,11 @@ async def root():
 @app.get("/health")
 async def health():
     return {"status": "ok", "bootstrapped": await is_bootstrapped()}
+
+
+@app.get("/dashboard")
+async def dashboard():
+    return FileResponse(str(STATIC_DIR / "dashboard.html"))
 
 
 @app.get("/skill.md")
